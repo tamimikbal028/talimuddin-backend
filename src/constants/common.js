@@ -1,0 +1,17 @@
+export const REACTION_TARGET_MODELS = {
+  POST: "POST",
+  COMMENT: "COMMENT",
+};
+
+export const SAVED_ITEM_TYPES = {
+  POST: "POST",
+  VIDEO: "VIDEO",
+  ARTICLE: "ARTICLE",
+};
+
+export const ROLES = {
+  OWNER: "OWNER",
+  ADMIN: "ADMIN",
+  MODERATOR: "MODERATOR",
+  MEMBER: "MEMBER",
+};
