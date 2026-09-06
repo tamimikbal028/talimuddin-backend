@@ -131,7 +131,7 @@ const createBranchService = async (branchData, userId) => {
       creator_id: userId,
       join_code: joinCode,
       is_deleted: false,
-      members_count: 1, // Start at 1 with creator
+      members_count: 0, // Starts at 0 (creator is owner/admin, not regular member)
     })
     .select()
     .single();
@@ -282,11 +282,13 @@ const removeMemberService = async (
     .delete()
     .eq("id", targetMembership.id);
 
-  // Decrement member count
-  await supabase
-    .from("branches")
-    .update({ members_count: Math.max(0, (branch.members_count || 1) - 1) })
-    .eq("id", branchId);
+  // Decrement member count if target was a regular member
+  if (!targetMembership.is_admin && !targetMembership.is_owner) {
+    await supabase
+      .from("branches")
+      .update({ members_count: Math.max(0, (branch.members_count || 1) - 1) })
+      .eq("id", branchId);
+  }
 
   return {
     branch_id: branch.id,
@@ -330,6 +332,12 @@ const promoteMemberService = async (branchId, creatorId, targetUserId) => {
     .update({ is_admin: true })
     .eq("id", membership.id);
 
+  // Decrement regular members count since user became admin
+  await supabase
+    .from("branches")
+    .update({ members_count: Math.max(0, (branch.members_count || 1) - 1) })
+    .eq("id", branchId);
+
   return { branch_id: branch.id, user_id: targetUserId };
 };
 
@@ -337,7 +345,7 @@ const promoteMemberService = async (branchId, creatorId, targetUserId) => {
 const demoteMemberService = async (branchId, creatorId, targetUserId) => {
   const { data: branch } = await supabase
     .from("branches")
-    .select("id, creator_id, is_deleted")
+    .select("id, creator_id, members_count, is_deleted")
     .eq("id", branchId)
     .maybeSingle();
 
@@ -367,6 +375,12 @@ const demoteMemberService = async (branchId, creatorId, targetUserId) => {
     .from("branch_memberships")
     .update({ is_admin: false })
     .eq("id", membership.id);
+
+  // Increment regular members count since user is now regular member
+  await supabase
+    .from("branches")
+    .update({ members_count: (branch.members_count || 0) + 1 })
+    .eq("id", branchId);
 
   return { branch_id: branch.id, user_id: targetUserId };
 };
@@ -648,7 +662,21 @@ const getBranchDetailsService = async (branchId, userId) => {
     join_code: !!membership ? branchRow.join_code : null,
   };
 
-  return { branch: mapBranchDetailsRow(branchRow), meta };
+  // Get accurate count of regular members (excluding admins and owner)
+  const { count: regularMembersCount } = await supabase
+    .from("branch_memberships")
+    .select("id", { count: "exact", head: true })
+    .eq("branch_id", branchId)
+    .eq("is_deleted", false)
+    .eq("is_admin", false)
+    .eq("is_owner", false);
+
+  const mappedBranch = mapBranchDetailsRow(branchRow);
+  if (regularMembersCount !== null && regularMembersCount !== undefined) {
+    mappedBranch.members_count = regularMembersCount;
+  }
+
+  return { branch: mappedBranch, meta };
 };
 
 // ADD MANUAL MEMBER (Creator or Admin)
@@ -905,7 +933,9 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
       { count: "exact" }
     )
     .eq("branch_id", branchId)
-    .eq("is_deleted", false);
+    .eq("is_deleted", false)
+    .eq("is_admin", false)
+    .eq("is_owner", false);
 
   if (queryParams?.search) {
     const s = queryParams.search.trim();
@@ -932,6 +962,15 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
     .map((membership) => {
       const u = membership.user;
       const isManual = !membership.user_id;
+
+      // Ensure admin or owner or creator is completely excluded
+      if (
+        membership.is_admin ||
+        membership.is_owner ||
+        (!isManual && branch.creator_id === u?.id)
+      ) {
+        return null;
+      }
 
       const isSelf = !isManual && u?.id === userId;
       const targetIsCreator = !isManual && branch.creator_id === u?.id;
