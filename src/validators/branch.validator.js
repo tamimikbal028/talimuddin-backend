@@ -79,9 +79,49 @@ const userIdBodySchema = Joi.object({
     }),
 });
 
+// Add manual member schema
+const addMemberSchema = Joi.object({
+  name: Joi.string().trim().min(2).max(100).required().messages({
+    "string.empty": "Member name is required",
+    "any.required": "Member name is required",
+  }),
+  phone: Joi.string().trim().min(5).max(20).required().messages({
+    "string.empty": "Phone number is required",
+    "any.required": "Phone number is required",
+  }),
+  address: Joi.string().trim().max(250).optional().allow("", null),
+  blood_group: Joi.string()
+    .trim()
+    .valid("A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-")
+    .optional()
+    .allow("", null),
+  email: Joi.string().trim().email().optional().allow("", null),
+  note: Joi.string().trim().max(500).optional().allow("", null),
+});
+
+// Update manual member schema
+const updateMemberSchema = Joi.object({
+  name: Joi.string().trim().min(2).max(100).optional().messages({
+    "string.empty": "Member name cannot be empty",
+  }),
+  phone: Joi.string().trim().min(5).max(20).optional().messages({
+    "string.empty": "Phone number cannot be empty",
+  }),
+  address: Joi.string().trim().max(250).optional().allow("", null),
+  blood_group: Joi.string()
+    .trim()
+    .valid("A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-")
+    .optional()
+    .allow("", null),
+  email: Joi.string().trim().email().optional().allow("", null),
+  note: Joi.string().trim().max(500).optional().allow("", null),
+});
+
 export {
   createBranchSchema,
   joinBranchSchema,
   updateBranchSchema,
   userIdBodySchema,
+  addMemberSchema,
+  updateMemberSchema,
 };

@@ -74,14 +74,20 @@ create table if not exists public.branches (
 create table if not exists public.branch_memberships (
   id uuid primary key default gen_random_uuid(),
   branch_id uuid not null references public.branches(id) on delete cascade,
-  user_id uuid not null references public.users(id) on delete cascade,
+  user_id uuid references public.users(id) on delete cascade,
+  name text,
+  phone text,
+  address text,
+  blood_group text,
+  email text,
+  note text,
   is_owner boolean not null default false,
   is_admin boolean not null default false,
   is_deleted boolean not null default false,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  constraint branch_memberships_branch_user_unique unique (branch_id, user_id)
+  updated_at timestamptz not null default now()
 );
+create unique index if not exists branch_memberships_branch_user_unique_idx on public.branch_memberships (branch_id, user_id) where user_id is not null;
 
 -- [Table: Branch Finance Categories]
 create table if not exists public.branch_finance_categories (

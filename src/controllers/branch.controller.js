@@ -203,18 +203,23 @@ const leaveBranch = AsyncHandler(async (req, res) => {
 // 10. REMOVE MEMBER
 // ==========================================
 const removeMember = AsyncHandler(async (req, res) => {
-  const { branchId } = req.params;
-  const { userId } = req.body;
+  const { branchId, memberId } = req.params;
+  const { userId } = req.body || {};
 
-  const { branch_id: id, user_id: removedUserId } =
-    await branchServices.removeMemberService(branchId, req.user.id, userId);
+  const { branch_id: id, user_id: removedUserId, member_id: removedMemberId } =
+    await branchServices.removeMemberService(
+      branchId,
+      req.user.id,
+      userId || null,
+      memberId || null
+    );
 
   return res
     .status(200)
     .json(
       new ApiResponse(
         200,
-        { branch_id: id, user_id: removedUserId },
+        { branch_id: id, user_id: removedUserId, member_id: removedMemberId },
         "Member removed successfully"
       )
     );
@@ -262,6 +267,41 @@ const demoteMember = AsyncHandler(async (req, res) => {
     );
 });
 
+// ==========================================
+// 13. ADD MANUAL MEMBER
+// ==========================================
+const addMember = AsyncHandler(async (req, res) => {
+  const { branchId } = req.params;
+
+  const { member } = await branchServices.addMemberService(
+    branchId,
+    req.user.id,
+    req.body
+  );
+
+  return res
+    .status(201)
+    .json(new ApiResponse(201, { member }, "Member added successfully"));
+});
+
+// ==========================================
+// 14. UPDATE MEMBER DETAILS
+// ==========================================
+const updateMember = AsyncHandler(async (req, res) => {
+  const { branchId, memberId } = req.params;
+
+  const { member } = await branchServices.updateMemberService(
+    branchId,
+    req.user.id,
+    memberId,
+    req.body
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, { member }, "Member updated successfully"));
+});
+
 const branchControllers = {
   createBranch,
   getMyBranches,
@@ -276,6 +316,8 @@ const branchControllers = {
   updateBranch,
   getBranchMembers,
   leaveBranch,
+  addMember,
+  updateMember,
 };
 
 export default branchControllers;
