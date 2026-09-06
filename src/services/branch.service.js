@@ -818,7 +818,8 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
     count,
     error,
   } = await memberQuery
-    .order("created_at", { ascending: false })
+    .order("serial_no", { ascending: true, nullsFirst: false })
+    .order("created_at", { ascending: true })
     .range(from, to);
 
   if (error) throw new ApiError(500, error.message);
