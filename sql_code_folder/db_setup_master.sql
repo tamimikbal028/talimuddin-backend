@@ -75,6 +75,7 @@ create table if not exists public.branch_memberships (
   id uuid primary key default gen_random_uuid(),
   branch_id uuid not null references public.branches(id) on delete cascade,
   user_id uuid references public.users(id) on delete cascade,
+  serial_no integer,
   name text,
   phone text,
   address text,

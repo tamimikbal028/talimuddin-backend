@@ -81,6 +81,7 @@ const userIdBodySchema = Joi.object({
 
 // Add manual member schema
 const addMemberSchema = Joi.object({
+  serial_no: Joi.number().integer().min(1).optional().allow(null, ""),
   name: Joi.string().trim().min(2).max(100).required().messages({
     "string.empty": "Member name is required",
     "any.required": "Member name is required",
@@ -101,6 +102,7 @@ const addMemberSchema = Joi.object({
 
 // Update manual member schema
 const updateMemberSchema = Joi.object({
+  serial_no: Joi.number().integer().min(1).optional().allow(null, ""),
   name: Joi.string().trim().min(2).max(100).optional().messages({
     "string.empty": "Member name cannot be empty",
   }),

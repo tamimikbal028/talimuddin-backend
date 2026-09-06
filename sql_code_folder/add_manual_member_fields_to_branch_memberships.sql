@@ -5,6 +5,7 @@ alter table public.branch_memberships alter column user_id drop not null;
 
 -- 2. Add manual member fields
 alter table public.branch_memberships 
+  add column if not exists serial_no integer,
   add column if not exists name text,
   add column if not exists phone text,
   add column if not exists address text,

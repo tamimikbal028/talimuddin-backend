@@ -676,9 +676,17 @@ const addMemberService = async (branchId, requesterId, memberData) => {
     throw new ApiError(403, "Only branch creator or admins can add members");
   }
 
+  const serialNo =
+    memberData.serial_no !== undefined &&
+    memberData.serial_no !== null &&
+    memberData.serial_no !== ""
+      ? Number(memberData.serial_no)
+      : null;
+
   const insertPayload = {
     branch_id: branchId,
     user_id: null,
+    serial_no: serialNo,
     name: memberData.name.trim(),
     phone: memberData.phone.trim(),
     address: memberData.address?.trim() || null,
@@ -708,6 +716,7 @@ const addMemberService = async (branchId, requesterId, memberData) => {
 
   const formattedMember = {
     id: newMember.id,
+    serial_no: newMember.serial_no || null,
     name: newMember.name,
     phone: newMember.phone,
     address: newMember.address,
@@ -780,6 +789,12 @@ const updateMemberService = async (
   }
 
   const updates = {};
+  if (updateData.serial_no !== undefined) {
+    updates.serial_no =
+      updateData.serial_no !== null && updateData.serial_no !== ""
+        ? Number(updateData.serial_no)
+        : null;
+  }
   if (updateData.name !== undefined) updates.name = updateData.name.trim();
   if (updateData.phone !== undefined)
     updates.phone = updateData.phone ? updateData.phone.trim() : null;
@@ -813,6 +828,7 @@ const updateMemberService = async (
 
   const formattedMember = {
     id: updatedMember.id,
+    serial_no: updatedMember.serial_no || null,
     name: memberName,
     phone: updatedMember.phone,
     address: updatedMember.address,
@@ -873,6 +889,7 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
     .select(
       `
       id,
+      serial_no,
       name,
       phone,
       address,
@@ -892,7 +909,13 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
 
   if (queryParams?.search) {
     const s = queryParams.search.trim();
-    memberQuery = memberQuery.or(`name.ilike.%${s}%,phone.ilike.%${s}%`);
+    if (!isNaN(Number(s)) && Number(s) > 0) {
+      memberQuery = memberQuery.or(
+        `name.ilike.%${s}%,phone.ilike.%${s}%,serial_no.eq.${Number(s)}`
+      );
+    } else {
+      memberQuery = memberQuery.or(`name.ilike.%${s}%,phone.ilike.%${s}%`);
+    }
   }
 
   const {
@@ -928,6 +951,7 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
 
       return {
         id: membership.id,
+        serial_no: membership.serial_no || null,
         name: memberName,
         phone: memberPhone,
         address: membership.address || null,
