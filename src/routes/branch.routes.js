@@ -46,7 +46,6 @@ router.patch(
   branchControllers.updateBranch
 );
 router.delete("/:branchId", branchControllers.deleteBranch);
-router.delete("/:branchId/leave", branchControllers.leaveBranch);
 
 // Admin Member Action Routes (legacy userId in body)
 router.delete(

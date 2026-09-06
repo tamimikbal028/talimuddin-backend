@@ -175,27 +175,6 @@ const getBranchMembers = AsyncHandler(async (req, res) => {
   );
 });
 
-// ==========================================
-// 9. LEAVE BRANCH
-// ==========================================
-const leaveBranch = AsyncHandler(async (req, res) => {
-  const { branchId } = req.params;
-
-  const { branchId: leftBranchId } = await branchServices.leaveBranchService(
-    branchId,
-    req.user.id
-  );
-
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { branch_id: leftBranchId },
-        "Left branch successfully"
-      )
-    );
-});
 
 // ==========================================
 // 10. REMOVE MEMBER
@@ -272,7 +251,6 @@ const branchControllers = {
   deleteBranch,
   updateBranch,
   getBranchMembers,
-  leaveBranch,
   addMember,
   updateMember,
 };

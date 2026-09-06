@@ -382,50 +382,6 @@ const updateBranchService = async (branchId, userId, updateData) => {
   return { branch: mapBranchRow(updatedBranch) };
 };
 
-// LEAVE BRANCH
-const leaveBranchService = async (branchId, userId) => {
-  const { data: branch } = await supabase
-    .from("branches")
-    .select("*")
-    .eq("id", branchId)
-    .maybeSingle();
-
-  if (!branch || branch.is_deleted) {
-    throw new ApiError(404, "Branch not found");
-  }
-
-  // Check membership
-  const { data: membership } = await supabase
-    .from("branch_memberships")
-    .select("id")
-    .eq("branch_id", branchId)
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (!membership) {
-    throw new ApiError(404, "You are not a member of this branch");
-  }
-
-  // Check if Owner
-  if (branch.creator_id === userId) {
-    throw new ApiError(
-      400,
-      "Creator cannot leave the branch. Please delete the branch instead."
-    );
-  }
-
-  // Delete membership
-  await supabase.from("branch_memberships").delete().eq("id", membership.id);
-
-  // Decrement member count
-  await supabase
-    .from("branches")
-    .update({ members_count: Math.max(0, branch.members_count - 1) })
-    .eq("id", branchId);
-
-  return { branchId: branch.id };
-};
-
 // ==========================================
 // BRANCH SERVICES
 // ==========================================
@@ -947,7 +903,6 @@ const branchServices = {
   removeMemberService,
   deleteBranchService,
   updateBranchService,
-  leaveBranchService,
   addMemberService,
   updateMemberService,
 
