@@ -17,8 +17,6 @@ const createBranchSchema = Joi.object({
       "string.max": "Description cannot exceed 500 characters",
     }),
 
-  require_post_approval: Joi.boolean().optional(),
-
   branch_type: Joi.string()
     .valid("MAIN", "SUB")
     .default("MAIN")
