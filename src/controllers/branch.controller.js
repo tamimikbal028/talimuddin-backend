@@ -52,7 +52,6 @@ const searchBranches = AsyncHandler(async (req, res) => {
     .json(new ApiResponse(200, { branches }, "Branches searched successfully"));
 });
 
-
 // ==========================================
 // 2.3. GET MAIN BRANCHES
 // ==========================================
@@ -116,7 +115,6 @@ const joinBranch = AsyncHandler(async (req, res) => {
       )
     );
 });
-
 
 // ==========================================
 // 6. DELETE BRANCH
@@ -206,13 +204,16 @@ const removeMember = AsyncHandler(async (req, res) => {
   const { branchId, memberId } = req.params;
   const { userId } = req.body || {};
 
-  const { branch_id: id, user_id: removedUserId, member_id: removedMemberId } =
-    await branchServices.removeMemberService(
-      branchId,
-      req.user.id,
-      userId || null,
-      memberId || null
-    );
+  const {
+    branch_id: id,
+    user_id: removedUserId,
+    member_id: removedMemberId,
+  } = await branchServices.removeMemberService(
+    branchId,
+    req.user.id,
+    userId || null,
+    memberId || null
+  );
 
   return res
     .status(200)
@@ -221,48 +222,6 @@ const removeMember = AsyncHandler(async (req, res) => {
         200,
         { branch_id: id, user_id: removedUserId, member_id: removedMemberId },
         "Member removed successfully"
-      )
-    );
-});
-
-// ==========================================
-// 11. PROMOTE TO ADMIN
-// ==========================================
-const promoteMember = AsyncHandler(async (req, res) => {
-  const { branchId } = req.params;
-  const { userId } = req.body;
-
-  const { branch_id: id, user_id: promotedUserId } =
-    await branchServices.promoteMemberService(branchId, req.user.id, userId);
-
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { branch_id: id, user_id: promotedUserId },
-        "Member promoted to admin successfully"
-      )
-    );
-});
-
-// ==========================================
-// 12. DEMOTE TO MEMBER
-// ==========================================
-const demoteMember = AsyncHandler(async (req, res) => {
-  const { branchId } = req.params;
-  const { userId } = req.body;
-
-  const { branch_id: id, user_id: demotedUserId } =
-    await branchServices.demoteMemberService(branchId, req.user.id, userId);
-
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        { branch_id: id, user_id: demotedUserId },
-        "Admin demoted to member successfully"
       )
     );
 });
@@ -310,8 +269,6 @@ const branchControllers = {
   getBranchDetails,
   joinBranch,
   removeMember,
-  promoteMember,
-  demoteMember,
   deleteBranch,
   updateBranch,
   getBranchMembers,

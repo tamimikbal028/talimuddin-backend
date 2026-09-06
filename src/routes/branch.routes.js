@@ -54,15 +54,5 @@ router.delete(
   validate(userIdBodySchema),
   branchControllers.removeMember
 );
-router.patch(
-  "/:branchId/promote",
-  validate(userIdBodySchema),
-  branchControllers.promoteMember
-);
-router.patch(
-  "/:branchId/demote",
-  validate(userIdBodySchema),
-  branchControllers.demoteMember
-);
 
 export default router;

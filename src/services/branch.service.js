@@ -215,7 +215,6 @@ const joinBranchService = async (userId, joinCode) => {
   };
 };
 
-
 // REMOVE MEMBER (Creator or Admin)
 const removeMemberService = async (
   branchId,
@@ -295,94 +294,6 @@ const removeMemberService = async (
     user_id: targetMembership.user_id,
     member_id: targetMembership.id,
   };
-};
-
-// PROMOTE TO ADMIN (Creator only)
-const promoteMemberService = async (branchId, creatorId, targetUserId) => {
-  const { data: branch } = await supabase
-    .from("branches")
-    .select("id, creator_id, is_deleted")
-    .eq("id", branchId)
-    .maybeSingle();
-
-  if (!branch || branch.is_deleted) throw new ApiError(404, "Branch not found");
-
-  // Only creator can promote to admin
-  if (branch.creator_id !== creatorId) {
-    throw new ApiError(403, "Only branch creator can promote members to admin");
-  }
-
-  const { data: membership } = await supabase
-    .from("branch_memberships")
-    .select("id, is_admin")
-    .eq("branch_id", branchId)
-    .eq("user_id", targetUserId)
-    .maybeSingle();
-
-  if (!membership) {
-    throw new ApiError(404, "User is not a member of this branch");
-  }
-
-  if (membership.is_admin) {
-    throw new ApiError(400, "User is already an admin");
-  }
-
-  await supabase
-    .from("branch_memberships")
-    .update({ is_admin: true })
-    .eq("id", membership.id);
-
-  // Decrement regular members count since user became admin
-  await supabase
-    .from("branches")
-    .update({ members_count: Math.max(0, (branch.members_count || 1) - 1) })
-    .eq("id", branchId);
-
-  return { branch_id: branch.id, user_id: targetUserId };
-};
-
-// DEMOTE TO MEMBER (Creator only)
-const demoteMemberService = async (branchId, creatorId, targetUserId) => {
-  const { data: branch } = await supabase
-    .from("branches")
-    .select("id, creator_id, members_count, is_deleted")
-    .eq("id", branchId)
-    .maybeSingle();
-
-  if (!branch || branch.is_deleted) throw new ApiError(404, "Branch not found");
-
-  // Only creator can demote admin
-  if (branch.creator_id !== creatorId) {
-    throw new ApiError(403, "Only branch creator can demote admins");
-  }
-
-  const { data: membership } = await supabase
-    .from("branch_memberships")
-    .select("id, is_admin")
-    .eq("branch_id", branchId)
-    .eq("user_id", targetUserId)
-    .maybeSingle();
-
-  if (!membership) {
-    throw new ApiError(404, "User is not a member of this branch");
-  }
-
-  if (!membership.is_admin) {
-    throw new ApiError(400, "User is not an admin");
-  }
-
-  await supabase
-    .from("branch_memberships")
-    .update({ is_admin: false })
-    .eq("id", membership.id);
-
-  // Increment regular members count since user is now regular member
-  await supabase
-    .from("branches")
-    .update({ members_count: (branch.members_count || 0) + 1 })
-    .eq("id", branchId);
-
-  return { branch_id: branch.id, user_id: targetUserId };
 };
 
 // DELETE BRANCH (Creator only)
@@ -561,7 +472,6 @@ const getMyBranchesService = async (userId, queryParams) => {
   return { branches, pagination: buildPagination(page, limit, count ?? 0) };
 };
 
-
 // SEARCH BRANCHES
 const searchBranchesService = async (query) => {
   let builder = supabase
@@ -652,7 +562,6 @@ const getBranchDetailsService = async (branchId, userId) => {
 
   const isCreator = branchRow.creator_id === userId;
   const isAdmin = membership?.is_admin || false;
-
 
   const meta = {
     is_member: !!membership,
@@ -995,7 +904,9 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
         phone: memberPhone,
         address: membership.address || null,
         blood_group: membership.blood_group || null,
-        email: isManual ? membership.email : u?.email || membership.email || null,
+        email: isManual
+          ? membership.email
+          : u?.email || membership.email || null,
         note: membership.note || null,
         user: {
           id: u?.id || null,
@@ -1034,8 +945,6 @@ const branchServices = {
   createBranchService,
   joinBranchService,
   removeMemberService,
-  promoteMemberService,
-  demoteMemberService,
   deleteBranchService,
   updateBranchService,
   leaveBranchService,
