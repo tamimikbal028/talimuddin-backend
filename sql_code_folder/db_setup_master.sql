@@ -66,7 +66,6 @@ create table if not exists public.branches (
   cover_image text default null,
   branch_type public.branch_type not null default 'MAIN',
   parent_branch_id uuid references public.branches(id) on delete set null,
-  join_code text not null unique,
   creator_id uuid not null references public.users(id) on delete restrict,
   is_deleted boolean not null default false,
   members_count integer not null default 0 check (members_count >= 0),

@@ -17,7 +17,6 @@ const mapBranchRow = (row) => {
     branch_type: row.branch_type || BRANCH_TYPES.MAIN,
     parent_branch_id: row.parent_branch_id || null,
     creator: row.creator_id,
-    join_code: row.join_code,
     is_deleted: row.is_deleted || false,
     members_count: row.members_count || 0,
     created_at: row.created_at,
@@ -96,33 +95,6 @@ const createBranchService = async (branchData, userId) => {
     parentBranchId = parentBranch.id;
   }
 
-  // Generate unique 6-character alphanumeric join code
-  const generateJoinCode = () => {
-    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Removed confusing chars: 0,O,1,I
-    let code = "";
-    for (let i = 0; i < 6; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return code;
-  };
-
-  let joinCode = generateJoinCode();
-  let isUnique = false;
-
-  while (!isUnique) {
-    const { data: existing } = await supabase
-      .from("branches")
-      .select("id")
-      .eq("join_code", joinCode)
-      .maybeSingle();
-
-    if (!existing) {
-      isUnique = true;
-    } else {
-      joinCode = generateJoinCode();
-    }
-  }
-
   // Create Branch
   const { data: branchRow, error: branchError } = await supabase
     .from("branches")
@@ -135,7 +107,6 @@ const createBranchService = async (branchData, userId) => {
       branch_type: branchType,
       parent_branch_id: parentBranchId,
       creator_id: userId,
-      join_code: joinCode,
       is_deleted: false,
       members_count: 0, // Starts at 0 (creator is owner/admin, not regular member)
     })
@@ -171,54 +142,9 @@ const createBranchService = async (branchData, userId) => {
   return { branch, meta };
 };
 
-// JOIN BRANCH (via join code only)
-const joinBranchService = async (userId, joinCode) => {
-  // Find branch by join code
-  const { data: branch, error: branchError } = await supabase
-    .from("branches")
-    .select("*")
-    .eq("join_code", joinCode)
-    .maybeSingle();
-
-  if (branchError || !branch) {
-    throw new ApiError(404, "Invalid join code");
-  }
-
-  if (branch.is_deleted) {
-    throw new ApiError(404, "Branch not found");
-  }
-
-  // Check if already member
-  const { data: existing } = await supabase
-    .from("branch_memberships")
-    .select("id")
-    .eq("branch_id", branch.id)
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (existing) {
-    throw new ApiError(400, "Already a member of this branch");
-  }
-
-  // Directly join branch
-  await supabase.from("branch_memberships").insert({
-    branch_id: branch.id,
-    user_id: userId,
-    is_admin: false,
-    is_owner: false,
-  });
-
-  // Increment member count
-  await supabase
-    .from("branches")
-    .update({ members_count: branch.members_count + 1 })
-    .eq("id", branch.id);
-
-  return {
-    branch_id: branch.id,
-    branch_name: branch.name,
-    is_pending: false,
-  };
+// JOIN BRANCH (Feature discontinued)
+const joinBranchService = async () => {
+  throw new ApiError(410, "Join code feature has been removed");
 };
 
 // REMOVE MEMBER (Creator or Admin)
@@ -538,7 +464,6 @@ const getBranchDetailsService = async (branchId, userId) => {
     is_admin_user: user?.user_type === "ADMIN",
     is_creator: isCreator,
     is_admin: isAdmin,
-    join_code: !!membership ? branchRow.join_code : null,
   };
 
   // Get accurate count of regular members (excluding admins and owner)
