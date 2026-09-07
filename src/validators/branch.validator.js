@@ -38,6 +38,20 @@ const createBranchSchema = Joi.object({
       "string.max": "Location URL cannot exceed 1000 characters",
     }),
 
+  admin_info: Joi.array()
+    .items(
+      Joi.object({
+        name: Joi.string().trim().max(100).required().messages({
+          "string.empty": "Admin name cannot be empty",
+        }),
+        number: Joi.string().trim().max(30).required().messages({
+          "string.empty": "Admin number cannot be empty",
+        }),
+      })
+    )
+    .optional()
+    .default([]),
+
   branch_type: Joi.string()
     .valid("MAIN", "SUB")
     .default("MAIN")
@@ -102,6 +116,20 @@ const updateBranchSchema = Joi.object({
     .messages({
       "string.max": "Location URL cannot exceed 1000 characters",
     }),
+
+  admin_info: Joi.array()
+    .items(
+      Joi.object({
+        name: Joi.string().trim().max(100).required().messages({
+          "string.empty": "Admin name cannot be empty",
+        }),
+        number: Joi.string().trim().max(30).required().messages({
+          "string.empty": "Admin number cannot be empty",
+        }),
+      })
+    )
+    .optional()
+    .allow(null),
 
   require_post_approval: Joi.boolean().optional(),
   branch_type: Joi.string().valid("MAIN", "SUB").optional(),

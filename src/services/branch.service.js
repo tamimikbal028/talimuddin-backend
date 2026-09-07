@@ -12,6 +12,7 @@ const mapBranchRow = (row) => {
     description: row.description || null,
     location_name: row.location_name || null,
     location_url: row.location_url || null,
+    admin_info: Array.isArray(row.admin_info) ? row.admin_info : [],
     cover_image: row.cover_image,
     branch_type: row.branch_type || BRANCH_TYPES.MAIN,
     parent_branch_id: row.parent_branch_id || null,
@@ -130,6 +131,7 @@ const createBranchService = async (branchData, userId) => {
       description: branchData.description?.trim() || null,
       location_name: branchData.location_name?.trim() || null,
       location_url: branchData.location_url?.trim() || null,
+      admin_info: Array.isArray(branchData.admin_info) ? branchData.admin_info : [],
       branch_type: branchType,
       parent_branch_id: parentBranchId,
       creator_id: userId,
@@ -372,6 +374,10 @@ const updateBranchService = async (branchId, userId, updateData) => {
     updates.location_name = updateData.location_name?.trim() || null;
   if (updateData.location_url !== undefined)
     updates.location_url = updateData.location_url?.trim() || null;
+  if (updateData.admin_info !== undefined)
+    updates.admin_info = Array.isArray(updateData.admin_info)
+      ? updateData.admin_info
+      : [];
   if (updateData.branch_type) updates.branch_type = updateData.branch_type;
   if (updateData.parent_branch_id !== undefined)
     updates.parent_branch_id = updateData.parent_branch_id;

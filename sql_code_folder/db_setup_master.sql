@@ -62,6 +62,7 @@ create table if not exists public.branches (
   description text default null,
   location_name text default null,
   location_url text default null,
+  admin_info jsonb default '[]'::jsonb,
   cover_image text default null,
   branch_type public.branch_type not null default 'MAIN',
   parent_branch_id uuid references public.branches(id) on delete set null,
