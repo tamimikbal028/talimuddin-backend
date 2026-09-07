@@ -1,6 +1,7 @@
 import { supabase } from "../config/supabase.js";
 import { ApiError } from "../utils/ApiError.js";
 import { BRANCH_TYPES } from "../constants/branch.js";
+import { USER_TYPES } from "../constants/user.js";
 import { getPaginationParams, buildPagination } from "../utils/Pagination.js";
 
 // Helper to map DB branch row to frontend branch structure
@@ -221,8 +222,8 @@ const removeMemberService = async (
   };
 };
 
-// DELETE BRANCH (Creator only)
-const deleteBranchService = async (branchId, userId) => {
+// DELETE BRANCH (Creator or App Admin)
+const deleteBranchService = async (branchId, userId, userType) => {
   const { data: branch } = await supabase
     .from("branches")
     .select("id, creator_id, is_deleted")
@@ -237,9 +238,28 @@ const deleteBranchService = async (branchId, userId) => {
     throw new ApiError(404, "Branch already deleted");
   }
 
-  // Only creator can delete
-  if (branch.creator_id !== userId) {
-    throw new ApiError(403, "Only branch creator can delete branch");
+  const isCreator = branch.creator_id === userId;
+  let isAppAdmin = userType === USER_TYPES.ADMIN;
+
+  // Fallback check if userType wasn't passed or doesn't match
+  if (!isCreator && !isAppAdmin) {
+    const { data: user } = await supabase
+      .from("users")
+      .select("user_type")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (user?.user_type === USER_TYPES.ADMIN) {
+      isAppAdmin = true;
+    }
+  }
+
+  // Only creator or app admin can delete
+  if (!isCreator && !isAppAdmin) {
+    throw new ApiError(
+      403,
+      "Only branch creator or app administrator can delete branch"
+    );
   }
 
   // 1. Soft Delete Branch

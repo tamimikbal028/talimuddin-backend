@@ -124,7 +124,8 @@ const deleteBranch = AsyncHandler(async (req, res) => {
 
   const { branch_id: id } = await branchServices.deleteBranchService(
     branchId,
-    req.user.id
+    req.user.id,
+    req.user.user_type
   );
 
   return res
