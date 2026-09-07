@@ -7,7 +7,7 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 // 1. CREATE BRANCH
 // ==========================================
 const createBranch = AsyncHandler(async (req, res) => {
-  const { branch, meta } = await branchServices.createBranchService(
+  const { branch } = await branchServices.createBranchService(
     req.body,
     req.user.id
   );
@@ -15,7 +15,7 @@ const createBranch = AsyncHandler(async (req, res) => {
   return res
     .status(201)
     .json(
-      new ApiResponse(201, { branch, meta }, "Branch created successfully")
+      new ApiResponse(201, { branch }, "Branch created successfully")
     );
 });
 

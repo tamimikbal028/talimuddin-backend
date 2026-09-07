@@ -112,13 +112,7 @@ const createBranchService = async (branchData, userId) => {
   }
 
   const branch = mapBranchRow(branchRow);
-  const meta = {
-    is_member: false,
-    is_creator: true,
-    is_admin: false,
-  };
-
-  return { branch, meta };
+  return { branch };
 };
 
 // JOIN BRANCH (Feature discontinued)
