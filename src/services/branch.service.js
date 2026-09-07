@@ -10,6 +10,8 @@ const mapBranchRow = (row) => {
     id: row.id,
     name: row.name,
     description: row.description || null,
+    location_name: row.location_name || null,
+    location_url: row.location_url || null,
     cover_image: row.cover_image,
     branch_type: row.branch_type || BRANCH_TYPES.MAIN,
     parent_branch_id: row.parent_branch_id || null,
@@ -126,6 +128,8 @@ const createBranchService = async (branchData, userId) => {
     .insert({
       name: branchData.name,
       description: branchData.description?.trim() || null,
+      location_name: branchData.location_name?.trim() || null,
+      location_url: branchData.location_url?.trim() || null,
       branch_type: branchType,
       parent_branch_id: parentBranchId,
       creator_id: userId,
@@ -364,6 +368,10 @@ const updateBranchService = async (branchId, userId, updateData) => {
   if (updateData.name) updates.name = updateData.name;
   if (updateData.description !== undefined)
     updates.description = updateData.description?.trim() || null;
+  if (updateData.location_name !== undefined)
+    updates.location_name = updateData.location_name?.trim() || null;
+  if (updateData.location_url !== undefined)
+    updates.location_url = updateData.location_url?.trim() || null;
   if (updateData.branch_type) updates.branch_type = updateData.branch_type;
   if (updateData.parent_branch_id !== undefined)
     updates.parent_branch_id = updateData.parent_branch_id;

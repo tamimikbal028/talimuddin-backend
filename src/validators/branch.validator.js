@@ -18,6 +18,26 @@ const createBranchSchema = Joi.object({
       "string.max": "Description cannot exceed 500 characters",
     }),
 
+  location_name: Joi.string()
+    .trim()
+    .max(100)
+    .optional()
+    .allow("", null)
+    .default(null)
+    .messages({
+      "string.max": "Location name cannot exceed 100 characters",
+    }),
+
+  location_url: Joi.string()
+    .trim()
+    .max(1000)
+    .optional()
+    .allow("", null)
+    .default(null)
+    .messages({
+      "string.max": "Location URL cannot exceed 1000 characters",
+    }),
+
   branch_type: Joi.string()
     .valid("MAIN", "SUB")
     .default("MAIN")
@@ -61,6 +81,26 @@ const updateBranchSchema = Joi.object({
     .default(null)
     .messages({
       "string.max": "Description cannot exceed 500 characters",
+    }),
+
+  location_name: Joi.string()
+    .trim()
+    .max(100)
+    .optional()
+    .allow("", null)
+    .default(null)
+    .messages({
+      "string.max": "Location name cannot exceed 100 characters",
+    }),
+
+  location_url: Joi.string()
+    .trim()
+    .max(1000)
+    .optional()
+    .allow("", null)
+    .default(null)
+    .messages({
+      "string.max": "Location URL cannot exceed 1000 characters",
     }),
 
   require_post_approval: Joi.boolean().optional(),
