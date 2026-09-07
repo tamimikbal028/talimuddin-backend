@@ -1,7 +1,7 @@
 import { supabase } from "../config/supabase.js";
 import { ApiError } from "../utils/ApiError.js";
 
-// Helper to verify branch admin permissions
+// Helper to verify branch admin permissions or app administrator
 const requireBranchAdmin = async (branchId, userId) => {
   // 1. Fetch Branch
   const { data: branch, error: branchError } = await supabase
@@ -14,7 +14,16 @@ const requireBranchAdmin = async (branchId, userId) => {
     throw new ApiError(404, "Branch not found or has been deleted");
   }
 
-  // 2. Fetch Membership role
+  // 2. Fetch User to check if App Admin
+  const { data: user } = await supabase
+    .from("users")
+    .select("user_type")
+    .eq("id", userId)
+    .maybeSingle();
+
+  const isAppAdmin = user?.user_type === "ADMIN";
+
+  // 3. Fetch Membership role
   const { data: membership, error: memError } = await supabase
     .from("branch_memberships")
     .select("is_admin")
@@ -24,14 +33,14 @@ const requireBranchAdmin = async (branchId, userId) => {
 
   const isAdmin = membership?.is_admin === true;
 
-  if (!isAdmin) {
+  if (!isAdmin && !isAppAdmin) {
     throw new ApiError(
       403,
-      "Only branch admins can perform this action"
+      "Only branch admins or app administrators can access branch finance"
     );
   }
 
-  const result = { isAdmin };
+  const result = { isAdmin, isAppAdmin };
   return result;
 };
 
