@@ -22,20 +22,24 @@ const router = Router();
 router.get("/", optionalAuth, branchControllers.getAllBranches);
 router.get("/search", optionalAuth, branchControllers.searchBranches);
 router.get("/main-branches", optionalAuth, branchControllers.getMainBranches);
-// Branch details (About tab viewable by anyone, unauthenticated meta populated safely)
-router.get("/:branchId", optionalAuth, branchControllers.getBranchDetails);
 
 // ==========================================
-// 2. PROTECTED ROUTES (Requires valid login)
+// 2. PROTECTED STATIC ROUTES (Must be before /:branchId wildcard)
 // ==========================================
-// Branch Finance Sub-Routes (Strictly guarded)
-router.use("/:branchId/finance", verifyJWT, branchFinanceRouter);
-
 // Branch User Search (For appointing branch roles - App Admin only)
 router.get("/users/search", verifyJWT, branchControllers.searchUsers);
 
 // My Branches (User's joined branches)
 router.get("/myBranches", verifyJWT, branchControllers.getMyBranches);
+
+// ==========================================
+// 3. PARAMETERIZED BRANCH ROUTES (/:branchId)
+// ==========================================
+// Branch details (About tab viewable by anyone, unauthenticated meta populated safely)
+router.get("/:branchId", optionalAuth, branchControllers.getBranchDetails);
+
+// Branch Finance Sub-Routes (Strictly guarded)
+router.use("/:branchId/finance", verifyJWT, branchFinanceRouter);
 
 // Branch Creation & Joining
 router.post(
