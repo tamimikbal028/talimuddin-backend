@@ -16,32 +16,23 @@ const mapBranchRow = (row) => {
     cover_image: row.cover_image,
     branch_type: row.branch_type || BRANCH_TYPES.MAIN,
     parent_branch_id: row.parent_branch_id || null,
-    creator: row.creator_id,
     is_deleted: row.is_deleted || false,
     members_count: row.members_count || 0,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
   };
 };
 
 const mapBranchDetailsRow = (row) => {
   if (!row) return null;
   const mapped = mapBranchRow(row);
-  if (row.creator) {
-    mapped.creator = {
-      id: row.creator.id,
-      full_name: row.creator.full_name,
-      user_name: row.creator.user_name,
-      avatar: row.creator.avatar,
-    };
-  }
-  if (row.parent_branch) {
-    mapped.parent_branch = {
-      id: row.parent_branch.id,
-      name: row.parent_branch.name,
-    };
-  }
-  return mapped;
+  return {
+    ...mapped,
+    parent_branch: row.parent_branch
+      ? {
+          id: row.parent_branch.id,
+          name: row.parent_branch.name,
+        }
+      : null,
+  };
 };
 
 // ==========================================
@@ -103,7 +94,9 @@ const createBranchService = async (branchData, userId) => {
       description: branchData.description?.trim() || null,
       location_name: branchData.location_name?.trim() || null,
       location_url: branchData.location_url?.trim() || null,
-      admin_info: Array.isArray(branchData.admin_info) ? branchData.admin_info : [],
+      admin_info: Array.isArray(branchData.admin_info)
+        ? branchData.admin_info
+        : [],
       branch_type: branchType,
       parent_branch_id: parentBranchId,
       creator_id: userId,
@@ -427,8 +420,7 @@ const getBranchDetailsService = async (branchId, userId) => {
     .select(
       `
       *,
-      creator:users!creator_id(id, full_name, user_name, avatar),
-      parent_branch:branches!parent_branch_id(id, name)
+      parent_branch:parent_branch_id(id, name)
     `
     )
     .eq("id", branchId)
