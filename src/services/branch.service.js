@@ -828,6 +828,139 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
   };
 };
 
+// SEARCH USERS (App Admin only, for selecting branch admins)
+const searchUsersService = async (query, requesterId) => {
+  // 1. Verify requester is App Admin
+  const { data: requester, error: reqErr } = await supabase
+    .from("users")
+    .select("user_type")
+    .eq("id", requesterId)
+    .maybeSingle();
+
+  if (reqErr || !requester || requester.user_type !== "ADMIN") {
+    throw new ApiError(403, "Only app administrators can search users to assign roles");
+  }
+
+  let builder = supabase
+    .from("users")
+    .select("id, full_name, user_name, email, avatar")
+    .eq("account_status", "ACTIVE");
+
+  const trimmedQuery = query?.trim();
+  if (trimmedQuery) {
+    builder = builder.or(
+      `user_name.ilike.%${trimmedQuery}%,full_name.ilike.%${trimmedQuery}%,email.ilike.%${trimmedQuery}%`
+    );
+  }
+
+  const { data: users, error } = await builder
+    .order("full_name", { ascending: true })
+    .limit(20);
+
+  if (error) {
+    throw new ApiError(500, error.message || "Failed to search users");
+  }
+
+  return { users: users || [] };
+};
+
+// ADD BRANCH ADMIN (App Admin only)
+const addBranchAdminService = async (branchId, requesterId, targetUserId) => {
+  // 1. Verify requester is App Admin
+  const { data: requester, error: reqErr } = await supabase
+    .from("users")
+    .select("user_type")
+    .eq("id", requesterId)
+    .maybeSingle();
+
+  if (reqErr || !requester || requester.user_type !== "ADMIN") {
+    throw new ApiError(403, "Only app administrators can add branch admins");
+  }
+
+  // 2. Verify branch exists and is not deleted
+  const { data: branch, error: branchErr } = await supabase
+    .from("branches")
+    .select("id, name, is_deleted")
+    .eq("id", branchId)
+    .maybeSingle();
+
+  if (branchErr || !branch || branch.is_deleted) {
+    throw new ApiError(404, "Branch not found or has been deleted");
+  }
+
+  // 3. Verify target user exists and is active
+  const { data: targetUser, error: userErr } = await supabase
+    .from("users")
+    .select("id, full_name, user_name, email, avatar, account_status")
+    .eq("id", targetUserId)
+    .maybeSingle();
+
+  if (userErr || !targetUser || targetUser.account_status !== "ACTIVE") {
+    throw new ApiError(404, "Target user not found or inactive");
+  }
+
+  // 4. Check if membership already exists for this branch and user
+  const { data: existingMembership, error: memErr } = await supabase
+    .from("branch_memberships")
+    .select("id, is_admin, is_deleted")
+    .eq("branch_id", branchId)
+    .eq("user_id", targetUserId)
+    .maybeSingle();
+
+  if (memErr) {
+    throw new ApiError(500, memErr.message || "Failed to verify membership status");
+  }
+
+  if (existingMembership) {
+    if (existingMembership.is_admin && !existingMembership.is_deleted) {
+      throw new ApiError(400, "This user is already an admin of this branch");
+    }
+
+    // Update existing record to be an active admin
+    const { error: updateError } = await supabase
+      .from("branch_memberships")
+      .update({
+        is_admin: true,
+        is_deleted: false,
+        name: targetUser.full_name,
+        email: targetUser.email,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existingMembership.id);
+
+    if (updateError) {
+      throw new ApiError(500, updateError.message || "Failed to update member to admin");
+    }
+  } else {
+    // Insert new membership record as admin
+    const { error: insertError } = await supabase
+      .from("branch_memberships")
+      .insert({
+        branch_id: branchId,
+        user_id: targetUserId,
+        name: targetUser.full_name,
+        email: targetUser.email,
+        is_owner: false,
+        is_admin: true,
+        is_deleted: false,
+      });
+
+    if (insertError) {
+      throw new ApiError(500, insertError.message || "Failed to add user as branch admin");
+    }
+  }
+
+  return {
+    user: {
+      id: targetUser.id,
+      full_name: targetUser.full_name,
+      user_name: targetUser.user_name,
+      email: targetUser.email,
+      avatar: targetUser.avatar,
+    },
+  };
+};
+
 const branchServices = {
   // Branch Actions
   createBranchService,
@@ -837,12 +970,14 @@ const branchServices = {
   updateBranchService,
   addMemberService,
   updateMemberService,
+  addBranchAdminService,
 
   // Branch Info & Lists
   getMyBranchesService,
   getMainBranchesService,
   getBranchDetailsService,
   searchBranchesService,
+  searchUsersService,
 
   // Branch Members
   getBranchMembersService,

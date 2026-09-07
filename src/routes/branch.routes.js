@@ -8,6 +8,7 @@ import {
   userIdBodySchema,
   addMemberSchema,
   updateMemberSchema,
+  addBranchAdminSchema,
 } from "../validators/branch.validator.js";
 import branchControllers from "../controllers/branch.controller.js";
 import branchFinanceRouter from "./branchFinance.routes.js";
@@ -18,6 +19,9 @@ router.use(verifyJWT);
 // Branch Finance Sub-Routes
 router.use("/:branchId/finance", branchFinanceRouter);
 
+// Branch User Search (For appointing branch roles)
+router.get("/users/search", branchControllers.searchUsers);
+
 // Branch CRUD Routes
 router.post("/", validate(createBranchSchema), branchControllers.createBranch);
 router.get("/myBranches", branchControllers.getMyBranches);
@@ -27,6 +31,11 @@ router.post("/join", validate(joinBranchSchema), branchControllers.joinBranch);
 
 // Branch Details Routes
 router.get("/:branchId", branchControllers.getBranchDetails);
+router.post(
+  "/:branchId/admins",
+  validate(addBranchAdminSchema),
+  branchControllers.addBranchAdmin
+);
 router.get("/:branchId/members", branchControllers.getBranchMembers);
 router.post(
   "/:branchId/members",

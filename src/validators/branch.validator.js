@@ -187,6 +187,18 @@ const updateMemberSchema = Joi.object({
   note: Joi.string().trim().max(500).optional().allow("", null),
 });
 
+// Add branch admin schema
+const addBranchAdminSchema = Joi.object({
+  user_id: Joi.string()
+    .guid({ version: ["uuidv4"] })
+    .required()
+    .messages({
+      "string.guid": "Invalid user ID format",
+      "string.empty": "User ID is required",
+      "any.required": "User ID is required",
+    }),
+});
+
 export {
   createBranchSchema,
   joinBranchSchema,
@@ -194,4 +206,5 @@ export {
   userIdBodySchema,
   addMemberSchema,
   updateMemberSchema,
+  addBranchAdminSchema,
 };
