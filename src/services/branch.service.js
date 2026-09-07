@@ -111,24 +111,9 @@ const createBranchService = async (branchData, userId) => {
     throw new ApiError(500, branchError?.message || "Failed to create branch");
   }
 
-  // Add Creator as Member
-  const { error: memError } = await supabase.from("branch_memberships").insert({
-    branch_id: branchRow.id,
-    user_id: userId,
-    is_owner: true,
-    is_admin: true,
-  });
-
-  if (memError) {
-    throw new ApiError(
-      500,
-      memError.message || "Failed to create creator membership"
-    );
-  }
-
   const branch = mapBranchRow(branchRow);
   const meta = {
-    is_member: true,
+    is_member: false,
     is_creator: true,
     is_admin: false,
   };
@@ -757,6 +742,8 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
 
   if (!branch || branch.is_deleted) throw new ApiError(404, "Branch not found");
 
+  const isCreator = branch.creator_id === userId;
+
   // Check membership
   const { data: currentUserMembership } = await supabase
     .from("branch_memberships")
@@ -765,12 +752,19 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (!currentUserMembership) {
-    throw new ApiError(403, "You are not a member of this branch");
+  if (!currentUserMembership && !isCreator) {
+    const { data: user } = await supabase
+      .from("users")
+      .select("user_type")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (user?.user_type !== "ADMIN") {
+      throw new ApiError(403, "You are not a member of this branch");
+    }
   }
 
-  const isCreator = branch.creator_id === userId;
-  const isAdmin = currentUserMembership.is_admin;
+  const isAdmin = currentUserMembership?.is_admin || false;
 
   const { page, limit, from, to } = getPaginationParams(queryParams);
 
