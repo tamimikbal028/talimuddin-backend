@@ -83,7 +83,7 @@ router.delete(
   branchControllers.removeMember
 );
 
-// Branch Edit & Delete (Creator / App Admin)
+// Branch Edit & Delete (Branch Admin / App Admin)
 router.patch(
   "/:branchId",
   verifyJWT,

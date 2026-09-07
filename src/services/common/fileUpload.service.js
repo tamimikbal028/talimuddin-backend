@@ -24,11 +24,11 @@ const UPLOAD_CONFIGS = {
     authorize: async (req, recordId) => {
       const { data: branch } = await supabase
         .from("branches")
-        .select("creator_id")
+        .select("id")
         .eq("id", recordId)
         .maybeSingle();
       if (!branch) return false;
-      if (branch.creator_id === req.user.id) return true;
+      if (req.user.user_type === "ADMIN") return true;
       const { data: member } = await supabase
         .from("branch_memberships")
         .select("is_admin")
@@ -36,7 +36,7 @@ const UPLOAD_CONFIGS = {
         .eq("user_id", req.user.id)
         .eq("status", "JOINED")
         .maybeSingle();
-      return member && member.is_admin;
+      return !!(member && member.is_admin);
     },
   },
 };

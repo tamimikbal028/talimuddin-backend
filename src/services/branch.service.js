@@ -100,9 +100,8 @@ const createBranchService = async (branchData, userId) => {
         : [],
       branch_type: branchType,
       parent_branch_id: parentBranchId,
-      creator_id: userId,
       is_deleted: false,
-      members_count: 0, // Starts at 0 (creator is owner/admin, not regular member)
+      members_count: 0,
     })
     .select()
     .single();
@@ -120,37 +119,49 @@ const joinBranchService = async () => {
   throw new ApiError(410, "Join code feature has been removed");
 };
 
-// REMOVE MEMBER (Creator or Admin)
+// REMOVE MEMBER (App Admin or Branch Admin)
 const removeMemberService = async (
   branchId,
-  creatorOrAdminId,
+  requesterId,
   targetUserId = null,
   targetMemberId = null
 ) => {
   const { data: branch } = await supabase
     .from("branches")
-    .select("id, creator_id, members_count, is_deleted")
+    .select("id, members_count, is_deleted")
     .eq("id", branchId)
     .maybeSingle();
 
   if (!branch || branch.is_deleted) throw new ApiError(404, "Branch not found");
 
-  // Check if requester is creator or admin
-  const isCreator = branch.creator_id === creatorOrAdminId;
+  // Check if requester is app admin or branch admin
+  const { data: requesterUser } = await supabase
+    .from("users")
+    .select("user_type")
+    .eq("id", requesterId)
+    .maybeSingle();
+
+  const isAppAdmin = requesterUser?.user_type === "ADMIN";
+
   const { data: requesterMembership } = await supabase
     .from("branch_memberships")
     .select("is_admin")
     .eq("branch_id", branchId)
-    .eq("user_id", creatorOrAdminId)
+    .eq("user_id", requesterId)
     .maybeSingle();
 
-  if (!isCreator && !requesterMembership?.is_admin) {
-    throw new ApiError(403, "Only branch creator or admin can remove members");
+  const isBranchAdmin = requesterMembership?.is_admin === true;
+
+  if (!isAppAdmin && !isBranchAdmin) {
+    throw new ApiError(
+      403,
+      "Only branch admin or app administrator can remove members"
+    );
   }
 
   let query = supabase
     .from("branch_memberships")
-    .select("id, user_id, is_admin, is_owner")
+    .select("id, user_id, is_admin")
     .eq("branch_id", branchId);
 
   if (targetMemberId) {
@@ -167,17 +178,9 @@ const removeMemberService = async (
     throw new ApiError(404, "User is not a member of this branch");
   }
 
-  // Cannot remove creator
-  if (
-    targetMembership.is_owner ||
-    (targetMembership.user_id && branch.creator_id === targetMembership.user_id)
-  ) {
-    throw new ApiError(400, "Cannot remove the branch creator");
-  }
-
-  // Admin cannot remove another Admin (only Creator can)
-  if (!isCreator && targetMembership.is_admin) {
-    throw new ApiError(403, "Admins cannot remove other admins");
+  // Branch Admin cannot remove another Branch Admin (only App Admin can)
+  if (!isAppAdmin && targetMembership.is_admin) {
+    throw new ApiError(403, "Only app administrators can remove branch admins");
   }
 
   // Delete membership
@@ -187,7 +190,7 @@ const removeMemberService = async (
     .eq("id", targetMembership.id);
 
   // Decrement member count if target was a regular member
-  if (!targetMembership.is_admin && !targetMembership.is_owner) {
+  if (!targetMembership.is_admin) {
     await supabase
       .from("branches")
       .update({ members_count: Math.max(0, (branch.members_count || 1) - 1) })
@@ -201,11 +204,11 @@ const removeMemberService = async (
   };
 };
 
-// DELETE BRANCH (Creator or App Admin)
+// DELETE BRANCH (App Admin only)
 const deleteBranchService = async (branchId, userId, userType) => {
   const { data: branch } = await supabase
     .from("branches")
-    .select("id, creator_id, is_deleted")
+    .select("id, is_deleted")
     .eq("id", branchId)
     .maybeSingle();
 
@@ -217,11 +220,10 @@ const deleteBranchService = async (branchId, userId, userType) => {
     throw new ApiError(404, "Branch already deleted");
   }
 
-  const isCreator = branch.creator_id === userId;
   let isAppAdmin = userType === USER_TYPES.ADMIN;
 
   // Fallback check if userType wasn't passed or doesn't match
-  if (!isCreator && !isAppAdmin) {
+  if (!isAppAdmin) {
     const { data: user } = await supabase
       .from("users")
       .select("user_type")
@@ -233,11 +235,10 @@ const deleteBranchService = async (branchId, userId, userType) => {
     }
   }
 
-  // Only creator or app admin can delete
-  if (!isCreator && !isAppAdmin) {
+  if (!isAppAdmin) {
     throw new ApiError(
       403,
-      "Only branch creator or app administrator can delete branch"
+      "Only app administrator can delete branch"
     );
   }
 
@@ -256,7 +257,7 @@ const deleteBranchService = async (branchId, userId, userType) => {
   return { branch_id: branch.id };
 };
 
-// UPDATE BRANCH (Creator or Admin)
+// UPDATE BRANCH (App Admin or Branch Admin)
 const updateBranchService = async (branchId, userId, updateData) => {
   const { data: branch } = await supabase
     .from("branches")
@@ -268,8 +269,15 @@ const updateBranchService = async (branchId, userId, updateData) => {
     throw new ApiError(404, "Branch not found");
   }
 
-  // Check if user is creator or admin
-  const isCreator = branch.creator_id === userId;
+  // Check if user is app admin or branch admin
+  const { data: user } = await supabase
+    .from("users")
+    .select("user_type")
+    .eq("id", userId)
+    .maybeSingle();
+
+  const isAppAdmin = user?.user_type === "ADMIN";
+
   const { data: membership } = await supabase
     .from("branch_memberships")
     .select("is_admin")
@@ -277,10 +285,12 @@ const updateBranchService = async (branchId, userId, updateData) => {
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (!isCreator && !membership?.is_admin) {
+  const isBranchAdmin = membership?.is_admin === true;
+
+  if (!isAppAdmin && !isBranchAdmin) {
     throw new ApiError(
       403,
-      "Only branch creator or admin can update branch details"
+      "Only branch admin or app administrator can update branch details"
     );
   }
 
@@ -331,8 +341,7 @@ const getMyBranchesService = async (userId, queryParams) => {
     .select(
       `
       branch:branches!inner(
-        id, name, cover_image, is_deleted,
-        creator:users!creator_id(id, full_name, user_name, avatar)
+        id, name, cover_image, is_deleted
       )
     `,
       { count: "exact" }
@@ -350,10 +359,6 @@ const getMyBranchesService = async (userId, queryParams) => {
       id: branch.id,
       name: branch.name,
       cover_image: branch.cover_image,
-      creator: {
-        full_name: branch.creator?.full_name,
-        user_name: branch.creator?.user_name,
-      },
     };
   });
 
@@ -372,8 +377,7 @@ const getAllBranchesService = async (queryParams) => {
     .from("branches")
     .select(
       `
-      id, name, cover_image, is_deleted, branch_type,
-      creator:users!creator_id(id, full_name, user_name, avatar)
+      id, name, cover_image, is_deleted, branch_type
     `,
       { count: "exact" }
     )
@@ -388,10 +392,6 @@ const getAllBranchesService = async (queryParams) => {
     name: branch.name,
     cover_image: branch.cover_image,
     branch_type: branch.branch_type || BRANCH_TYPES.MAIN,
-    creator: {
-      full_name: branch.creator?.full_name,
-      user_name: branch.creator?.user_name,
-    },
   }));
 
   return { branches, pagination: buildPagination(page, limit, count ?? 0) };
@@ -403,8 +403,7 @@ const searchBranchesService = async (query) => {
     .from("branches")
     .select(
       `
-      id, name, cover_image, is_deleted, branch_type, parent_branch_id,
-      creator:users!creator_id(id, full_name, user_name, avatar)
+      id, name, cover_image, is_deleted, branch_type, parent_branch_id
     `
     )
     .eq("is_deleted", false);
@@ -424,10 +423,6 @@ const searchBranchesService = async (query) => {
     name: branch.name,
     cover_image: branch.cover_image,
     branch_type: branch.branch_type || BRANCH_TYPES.MAIN,
-    creator: {
-      full_name: branch.creator?.full_name,
-      user_name: branch.creator?.user_name,
-    },
   }));
 
   return { branches: formattedBranches };
@@ -473,7 +468,6 @@ const getBranchDetailsService = async (branchId, userId) => {
   // Check membership if user is authenticated
   let membership = null;
   let user = null;
-  let isCreator = false;
   let isAdmin = false;
 
   if (userId) {
@@ -492,25 +486,23 @@ const getBranchDetailsService = async (branchId, userId) => {
       .maybeSingle();
     user = userData;
 
-    isCreator = branchRow.creator_id === userId;
     isAdmin = membership?.is_admin || false;
   }
 
   const meta = {
     is_member: !!membership,
     is_admin_user: user?.user_type === "ADMIN",
-    is_creator: isCreator,
+    is_creator: false,
     is_admin: isAdmin,
   };
 
-  // Get accurate count of regular members (excluding admins and owner)
+  // Get accurate count of regular members (excluding admins)
   const { count: regularMembersCount } = await supabase
     .from("branch_memberships")
     .select("id", { count: "exact", head: true })
     .eq("branch_id", branchId)
     .eq("is_deleted", false)
-    .eq("is_admin", false)
-    .eq("is_owner", false);
+    .eq("is_admin", false);
 
   const mappedBranch = mapBranchDetailsRow(branchRow);
   if (regularMembersCount !== null && regularMembersCount !== undefined) {
@@ -520,11 +512,11 @@ const getBranchDetailsService = async (branchId, userId) => {
   return { branch: mappedBranch, meta };
 };
 
-// ADD MANUAL MEMBER (Creator or Admin)
+// ADD MANUAL MEMBER (App Admin or Branch Admin)
 const addMemberService = async (branchId, requesterId, memberData) => {
   const { data: branch, error: branchErr } = await supabase
     .from("branches")
-    .select("id, creator_id, members_count, is_deleted")
+    .select("id, members_count, is_deleted")
     .eq("id", branchId)
     .maybeSingle();
 
@@ -532,8 +524,15 @@ const addMemberService = async (branchId, requesterId, memberData) => {
     throw new ApiError(404, "Branch not found");
   }
 
-  // Check if requester is creator or admin
-  const isCreator = branch.creator_id === requesterId;
+  // Check if requester is app admin or branch admin
+  const { data: requesterUser } = await supabase
+    .from("users")
+    .select("user_type")
+    .eq("id", requesterId)
+    .maybeSingle();
+
+  const isAppAdmin = requesterUser?.user_type === "ADMIN";
+
   const { data: requesterMembership } = await supabase
     .from("branch_memberships")
     .select("is_admin")
@@ -541,8 +540,13 @@ const addMemberService = async (branchId, requesterId, memberData) => {
     .eq("user_id", requesterId)
     .maybeSingle();
 
-  if (!isCreator && !requesterMembership?.is_admin) {
-    throw new ApiError(403, "Only branch creator or admins can add members");
+  const isBranchAdmin = requesterMembership?.is_admin === true;
+
+  if (!isAppAdmin && !isBranchAdmin) {
+    throw new ApiError(
+      403,
+      "Only branch admins or app administrators can add members"
+    );
   }
 
   const serialNo =
@@ -562,7 +566,6 @@ const addMemberService = async (branchId, requesterId, memberData) => {
     blood_group: memberData.blood_group?.trim() || null,
     email: memberData.email?.trim() || null,
     note: memberData.note?.trim() || null,
-    is_owner: false,
     is_admin: false,
     is_deleted: false,
   };
@@ -613,7 +616,7 @@ const addMemberService = async (branchId, requesterId, memberData) => {
   return { member: formattedMember };
 };
 
-// UPDATE MEMBER (Creator or Admin)
+// UPDATE MEMBER (App Admin or Branch Admin)
 const updateMemberService = async (
   branchId,
   requesterId,
@@ -622,7 +625,7 @@ const updateMemberService = async (
 ) => {
   const { data: branch } = await supabase
     .from("branches")
-    .select("id, creator_id, is_deleted")
+    .select("id, is_deleted")
     .eq("id", branchId)
     .maybeSingle();
 
@@ -630,8 +633,15 @@ const updateMemberService = async (
     throw new ApiError(404, "Branch not found");
   }
 
-  // Check if requester is creator or admin
-  const isCreator = branch.creator_id === requesterId;
+  // Check if requester is app admin or branch admin
+  const { data: requesterUser } = await supabase
+    .from("users")
+    .select("user_type")
+    .eq("id", requesterId)
+    .maybeSingle();
+
+  const isAppAdmin = requesterUser?.user_type === "ADMIN";
+
   const { data: requesterMembership } = await supabase
     .from("branch_memberships")
     .select("is_admin")
@@ -639,10 +649,12 @@ const updateMemberService = async (
     .eq("user_id", requesterId)
     .maybeSingle();
 
-  if (!isCreator && !requesterMembership?.is_admin) {
+  const isBranchAdmin = requesterMembership?.is_admin === true;
+
+  if (!isAppAdmin && !isBranchAdmin) {
     throw new ApiError(
       403,
-      "Only branch creator or admin can update member details"
+      "Only branch admin or app administrator can update member details"
     );
   }
 
@@ -715,7 +727,7 @@ const updateMemberService = async (
         !isManual && u?.id === requesterId ? "SELF" : "NONE",
       member_id: updatedMember.id,
       is_admin: updatedMember.is_admin,
-      is_creator: !isManual && branch.creator_id === u?.id,
+      is_creator: false,
       is_self: !isManual && u?.id === requesterId,
       is_manual: isManual,
       can_manage: true,
@@ -730,13 +742,19 @@ const updateMemberService = async (
 const getBranchMembersService = async (branchId, userId, queryParams) => {
   const { data: branch } = await supabase
     .from("branches")
-    .select("creator_id, is_deleted")
+    .select("id, is_deleted")
     .eq("id", branchId)
     .maybeSingle();
 
   if (!branch || branch.is_deleted) throw new ApiError(404, "Branch not found");
 
-  const isCreator = branch.creator_id === userId;
+  const { data: requesterUser } = await supabase
+    .from("users")
+    .select("user_type")
+    .eq("id", userId)
+    .maybeSingle();
+
+  const isAppAdmin = requesterUser?.user_type === "ADMIN";
 
   // Check membership
   const { data: currentUserMembership } = await supabase
@@ -746,19 +764,12 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (!currentUserMembership && !isCreator) {
-    const { data: user } = await supabase
-      .from("users")
-      .select("user_type")
-      .eq("id", userId)
-      .maybeSingle();
-
-    if (user?.user_type !== "ADMIN") {
-      throw new ApiError(403, "You are not a member of this branch");
-    }
+  if (!currentUserMembership && !isAppAdmin) {
+    throw new ApiError(403, "You are not a member of this branch");
   }
 
   const isAdmin = currentUserMembership?.is_admin || false;
+  const canManage = isAppAdmin || isAdmin;
 
   const { page, limit, from, to } = getPaginationParams(queryParams);
 
@@ -775,7 +786,6 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
       email,
       note,
       is_admin,
-      is_owner,
       created_at,
       user_id,
       user:users!user_id(id, full_name, user_name, avatar, email)
@@ -784,8 +794,7 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
     )
     .eq("branch_id", branchId)
     .eq("is_deleted", false)
-    .eq("is_admin", false)
-    .eq("is_owner", false);
+    .eq("is_admin", false);
 
   if (queryParams?.search) {
     const s = queryParams.search.trim();
@@ -814,29 +823,14 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
       const u = membership.user;
       const isManual = !membership.user_id;
 
-      // Ensure admin or owner or creator is completely excluded
-      if (
-        membership.is_admin ||
-        membership.is_owner ||
-        (!isManual && branch.creator_id === u?.id)
-      ) {
+      if (membership.is_admin) {
         return null;
       }
 
       const isSelf = !isManual && u?.id === userId;
-      const targetIsCreator = !isManual && branch.creator_id === u?.id;
-      const targetIsAdmin = membership.is_admin;
-
-      // Creator can manage anyone except self; Admin can manage manual members and regular members
-      const canManage =
-        !isSelf &&
-        (isCreator ||
-          (isAdmin && (isManual || (!targetIsAdmin && !targetIsCreator))));
-
       const memberName = isManual
         ? membership.name || "Unnamed Member"
         : u?.full_name || membership.name || "Unnamed";
-
       const memberPhone = membership.phone || null;
 
       return {
@@ -859,11 +853,11 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
         meta: {
           user_relation_status: isSelf ? "SELF" : "NONE",
           member_id: membership.id,
-          is_admin: targetIsAdmin,
-          is_creator: targetIsCreator,
+          is_admin: false,
+          is_creator: false,
           is_self: isSelf,
           is_manual: isManual,
-          can_manage: canManage,
+          can_manage: canManage && !isSelf,
           joined_at: membership.created_at,
         },
       };
@@ -871,8 +865,8 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
     .filter(Boolean);
 
   const meta = {
-    is_creator: isCreator,
-    is_admin: isAdmin,
+    is_creator: false,
+    is_admin: isAdmin || isAppAdmin,
   };
 
   return {
@@ -1003,7 +997,6 @@ const addBranchAdminService = async (branchId, requesterId, targetUserId) => {
         user_id: targetUserId,
         name: targetUser.full_name,
         email: targetUser.email,
-        is_owner: false,
         is_admin: true,
         is_deleted: false,
       });
