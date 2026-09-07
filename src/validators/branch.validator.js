@@ -13,6 +13,7 @@ const createBranchSchema = Joi.object({
     .max(500)
     .optional()
     .allow("", null)
+    .default(null)
     .messages({
       "string.max": "Description cannot exceed 500 characters",
     }),
@@ -57,6 +58,7 @@ const updateBranchSchema = Joi.object({
     .max(500)
     .optional()
     .allow("", null)
+    .default(null)
     .messages({
       "string.max": "Description cannot exceed 500 characters",
     }),

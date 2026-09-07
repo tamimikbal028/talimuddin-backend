@@ -59,7 +59,7 @@ create table if not exists public.users (
 create table if not exists public.branches (
   id uuid primary key default gen_random_uuid(),
   name text not null,
-  description text,
+  description text default null,
   cover_image text default null,
   branch_type public.branch_type not null default 'MAIN',
   parent_branch_id uuid references public.branches(id) on delete set null,
