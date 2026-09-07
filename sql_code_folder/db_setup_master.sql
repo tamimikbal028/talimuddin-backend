@@ -106,6 +106,10 @@ create table if not exists public.branch_finances (
   branch_id uuid not null references public.branches(id) on delete cascade,
   type public.finance_type not null,
   amount numeric(12, 2) not null check (amount >= 0),
+  total_amount numeric(12, 2) not null default 0 check (total_amount >= 0),
+  paid_amount numeric(12, 2) not null default 0 check (paid_amount >= 0),
+  due_amount numeric(12, 2) not null default 0 check (due_amount >= 0),
+  payment_status text not null default 'PAID' check (payment_status in ('PAID', 'PARTIAL', 'DUE')),
   category_id uuid not null references public.branch_finance_categories(id) on delete restrict,
   note text default '',
   date timestamptz not null default now(),
@@ -117,11 +121,26 @@ create table if not exists public.branch_finances (
   updated_at timestamptz not null default now()
 );
 
+-- [Table: Branch Finance Payments (বকেয়া আদায় ও কিস্তির খাতা)]
+create table if not exists public.branch_finance_payments (
+  id uuid primary key default gen_random_uuid(),
+  finance_id uuid not null references public.branch_finances(id) on delete cascade,
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  amount numeric(12, 2) not null check (amount > 0),
+  payment_date timestamptz not null default now(),
+  note text default '',
+  recorded_by uuid not null references public.users(id),
+  created_at timestamptz not null default now()
+);
+
 -- ৫. ইনডেক্স সেটাপ
 create index if not exists users_user_name_trgm_idx on public.users using gin (user_name gin_trgm_ops);
 create index if not exists branch_finance_categories_branch_id_idx on public.branch_finance_categories (branch_id);
 create index if not exists branch_finances_branch_id_idx on public.branch_finances (branch_id);
 create index if not exists branch_finances_date_idx on public.branch_finances (date);
+create index if not exists idx_branch_finance_payments_finance_id on public.branch_finance_payments(finance_id);
+create index if not exists idx_branch_finance_payments_branch_id on public.branch_finance_payments(branch_id);
+create index if not exists idx_branch_finance_payments_date on public.branch_finance_payments(payment_date);
 
 -- ৬. ট্রিগার ফাংশনসমূহ
 

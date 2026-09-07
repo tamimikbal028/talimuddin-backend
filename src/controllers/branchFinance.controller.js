@@ -179,6 +179,41 @@ const deleteFinanceEntry = AsyncHandler(async (req, res) => {
   return response;
 });
 
+const recordFinancePayment = AsyncHandler(async (req, res) => {
+  const { branchId, entryId } = req.params;
+  const userId = req.user.id;
+
+  const { entry, payment } = await branchFinanceServices.recordFinancePaymentService(
+    branchId,
+    userId,
+    entryId,
+    req.body
+  );
+
+  const response = res
+    .status(200)
+    .json(new ApiResponse(200, { entry, payment }, "Payment recorded successfully"));
+
+  return response;
+});
+
+const getFinancePayments = AsyncHandler(async (req, res) => {
+  const { branchId, entryId } = req.params;
+  const userId = req.user.id;
+
+  const { payments } = await branchFinanceServices.getFinancePaymentsService(
+    branchId,
+    userId,
+    entryId
+  );
+
+  const response = res
+    .status(200)
+    .json(new ApiResponse(200, { payments }, "Payment history retrieved successfully"));
+
+  return response;
+});
+
 const branchFinanceControllers = {
   getCategoriesList,
   createCategory,
@@ -189,6 +224,8 @@ const branchFinanceControllers = {
   getFinanceMonthExport,
   updateFinanceEntry,
   deleteFinanceEntry,
+  recordFinancePayment,
+  getFinancePayments,
 };
 
 export default branchFinanceControllers;

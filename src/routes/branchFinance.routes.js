@@ -23,5 +23,10 @@ router
   .put(branchFinanceControllers.updateFinanceEntry)
   .delete(branchFinanceControllers.deleteFinanceEntry);
 
+router
+  .route("/:entryId/payments")
+  .get(branchFinanceControllers.getFinancePayments)
+  .post(branchFinanceControllers.recordFinancePayment);
+
 export default router;
 

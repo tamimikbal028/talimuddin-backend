@@ -1,5 +1,6 @@
 import { supabase } from "../config/supabase.js";
 import { ApiError } from "../utils/ApiError.js";
+import { FINANCE_TYPES, PAYMENT_STATUS } from "../constants/finance.js";
 
 // Helper to verify branch admin permissions or app administrator
 const requireBranchAdmin = async (branchId, userId) => {
@@ -24,7 +25,7 @@ const requireBranchAdmin = async (branchId, userId) => {
   const isAppAdmin = user?.user_type === "ADMIN";
 
   // 3. Fetch Membership role
-  const { data: membership, error: memError } = await supabase
+  const { data: membership } = await supabase
     .from("branch_memberships")
     .select("is_admin")
     .eq("branch_id", branchId)
@@ -42,6 +43,42 @@ const requireBranchAdmin = async (branchId, userId) => {
 
   const result = { isAdmin, isAppAdmin };
   return result;
+};
+
+// Helper to normalize entry object with due and payment fields
+const mapEntryWithDue = (entry) => {
+  if (!entry) return entry;
+  const totalAmount = Number(
+    entry.total_amount !== undefined && entry.total_amount !== null
+      ? entry.total_amount
+      : entry.amount
+  );
+  const paidAmount = Number(
+    entry.paid_amount !== undefined && entry.paid_amount !== null
+      ? entry.paid_amount
+      : entry.amount
+  );
+  const dueAmount = Number(
+    entry.due_amount !== undefined && entry.due_amount !== null
+      ? entry.due_amount
+      : 0
+  );
+  const paymentStatus =
+    entry.payment_status ||
+    (dueAmount > 0
+      ? paidAmount > 0
+        ? PAYMENT_STATUS.PARTIAL
+        : PAYMENT_STATUS.DUE
+      : PAYMENT_STATUS.PAID);
+
+  const mapped = {
+    ...entry,
+    total_amount: totalAmount,
+    paid_amount: paidAmount,
+    due_amount: dueAmount,
+    payment_status: paymentStatus,
+  };
+  return mapped;
 };
 
 // GET CATEGORIES LIST FOR SELECT BOX
@@ -70,7 +107,7 @@ const createCategoryService = async (branchId, userId, { name, type }) => {
     throw new ApiError(400, "Category name and type are required");
   }
 
-  if (type !== "INCOME" && type !== "EXPENSE") {
+  if (type !== FINANCE_TYPES.INCOME && type !== FINANCE_TYPES.EXPENSE) {
     throw new ApiError(400, "Type must be INCOME or EXPENSE");
   }
 
@@ -120,13 +157,16 @@ const createCategoryService = async (branchId, userId, { name, type }) => {
   return result;
 };
 
-// CREATE FINANCE ENTRY
+// CREATE FINANCE ENTRY (WITH OPTIONAL DUE & PAYMENT STATUS)
 const createFinanceEntryService = async (branchId, userId, data) => {
   await requireBranchAdmin(branchId, userId);
 
   const {
     type,
     amount,
+    total_amount,
+    paid_amount,
+    payment_status,
     category_id,
     note,
     date,
@@ -135,17 +175,48 @@ const createFinanceEntryService = async (branchId, userId, data) => {
     details,
   } = data;
 
-  if (!type || amount === undefined || !category_id) {
+  const rawAmount = total_amount !== undefined ? total_amount : amount;
+  if (!type || rawAmount === undefined || !category_id) {
     throw new ApiError(400, "Type, amount, and category_id are required");
   }
 
-  if (type !== "INCOME" && type !== "EXPENSE") {
+  if (type !== FINANCE_TYPES.INCOME && type !== FINANCE_TYPES.EXPENSE) {
     throw new ApiError(400, "Type must be INCOME or EXPENSE");
   }
 
-  const parsedAmount = Number(amount);
-  if (isNaN(parsedAmount) || parsedAmount <= 0) {
+  const totalAmount = Number(rawAmount);
+  if (isNaN(totalAmount) || totalAmount <= 0) {
     throw new ApiError(400, "Amount must be greater than 0");
+  }
+
+  // Calculate paid & due amounts based on payment_status
+  let status = payment_status || PAYMENT_STATUS.PAID;
+  let paidAmt = 0;
+  let dueAmt = 0;
+
+  if (status === PAYMENT_STATUS.PAID) {
+    paidAmt = totalAmount;
+    dueAmt = 0;
+  } else if (status === PAYMENT_STATUS.DUE) {
+    paidAmt = 0;
+    dueAmt = totalAmount;
+  } else if (status === PAYMENT_STATUS.PARTIAL) {
+    paidAmt = Number(paid_amount);
+    if (isNaN(paidAmt) || paidAmt < 0 || paidAmt >= totalAmount) {
+      throw new ApiError(
+        400,
+        "For partial payment, paid amount must be >= 0 and less than total amount"
+      );
+    }
+    dueAmt = totalAmount - paidAmt;
+    if (dueAmt <= 0) {
+      status = PAYMENT_STATUS.PAID;
+      dueAmt = 0;
+    }
+  } else {
+    status = PAYMENT_STATUS.PAID;
+    paidAmt = totalAmount;
+    dueAmt = 0;
   }
 
   // Verify category exists and matches type and branch
@@ -170,20 +241,50 @@ const createFinanceEntryService = async (branchId, userId, data) => {
       (sum, item) => sum + (Number(item.amount) || 0),
       0
     );
-    if (Math.abs(detailsSum - parsedAmount) > 0.01) {
+    if (Math.abs(detailsSum - totalAmount) > 0.01) {
       throw new ApiError(
         400,
-        `Total amount (${parsedAmount}) does not match the sum of item details (${detailsSum}).`
+        `Total amount (${totalAmount}) does not match the sum of item details (${detailsSum}).`
       );
     }
   }
 
-  const { data: entry, error: insertError } = await supabase
+  const basePayload = {
+    branch_id: branchId,
+    type,
+    amount: totalAmount,
+    total_amount: totalAmount,
+    paid_amount: paidAmt,
+    due_amount: dueAmt,
+    payment_status: status,
+    category_id,
+    note: note?.trim() || "",
+    date: date ? new Date(date).toISOString() : new Date().toISOString(),
+    recorded_by: userId,
+    person_name: personName?.trim() || "",
+    person_phone: personPhone?.trim() || "",
+    details: details?.length > 0 ? details : [],
+  };
+
+  const selectColsWithDue = `
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+    recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+    category:branch_finance_categories!category_id(id, name, type)
+  `;
+
+  let entry = null;
+  const { data: inserted, error: insertError } = await supabase
     .from("branch_finances")
-    .insert({
+    .insert(basePayload)
+    .select(selectColsWithDue)
+    .single();
+
+  if (insertError && insertError.code === "42703") {
+    // If due columns not yet added to DB, insert with fallback
+    const fallbackPayload = {
       branch_id: branchId,
       type,
-      amount: parsedAmount,
+      amount: totalAmount,
       category_id,
       note: note?.trim() || "",
       date: date ? new Date(date).toISOString() : new Date().toISOString(),
@@ -191,86 +292,269 @@ const createFinanceEntryService = async (branchId, userId, data) => {
       person_name: personName?.trim() || "",
       person_phone: personPhone?.trim() || "",
       details: details?.length > 0 ? details : [],
-    })
-    .select(
-      `
-      id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
-      recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-      category:branch_finance_categories!category_id(id, name, type)
-    `
-    )
-    .single();
+    };
+    const { data: fallbackInserted, error: fallbackError } = await supabase
+      .from("branch_finances")
+      .insert(fallbackPayload)
+      .select(`
+        id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
+        recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+        category:branch_finance_categories!category_id(id, name, type)
+      `)
+      .single();
 
-  if (insertError || !entry) {
+    if (fallbackError || !fallbackInserted) {
+      throw new ApiError(
+        500,
+        fallbackError?.message || "Failed to create finance entry"
+      );
+    }
+    entry = mapEntryWithDue(fallbackInserted);
+  } else if (insertError || !inserted) {
     throw new ApiError(
       500,
       insertError?.message || "Failed to create finance entry"
     );
+  } else {
+    entry = mapEntryWithDue(inserted);
+  }
+
+  // Record initial payment record if paidAmt > 0 (silently fails if table not created yet)
+  if (entry && paidAmt > 0) {
+    await supabase.from("branch_finance_payments").insert({
+      finance_id: entry.id,
+      branch_id: branchId,
+      amount: paidAmt,
+      payment_date: entry.date,
+      note: "Initial payment",
+      recorded_by: userId,
+    });
   }
 
   const result = { entry };
   return result;
 };
 
-// GET FINANCE ENTRIES (Paginated & Filtered)
+// RECORD PAYMENT / DUE COLLECTION ON A TRANSACTION
+const recordFinancePaymentService = async (branchId, userId, entryId, data) => {
+  await requireBranchAdmin(branchId, userId);
+
+  const { amount, date, note } = data;
+  const paymentAmount = Number(amount);
+
+  if (isNaN(paymentAmount) || paymentAmount <= 0) {
+    throw new ApiError(400, "Payment amount must be greater than 0");
+  }
+
+  // Fetch target entry
+  const { data: rawEntry, error: findError } = await supabase
+    .from("branch_finances")
+    .select("id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status")
+    .eq("id", entryId)
+    .eq("branch_id", branchId)
+    .maybeSingle();
+
+  if (findError && findError.code === "42703") {
+    throw new ApiError(
+      400,
+      "Due tracking is not yet active. Please run the SQL migration script in your Supabase SQL Editor."
+    );
+  }
+
+  if (findError || !rawEntry) {
+    throw new ApiError(404, "Finance entry not found or doesn't belong to this branch");
+  }
+
+  const entry = mapEntryWithDue(rawEntry);
+  const currentDue = entry.due_amount;
+
+  if (currentDue <= 0) {
+    throw new ApiError(400, "This transaction has already been fully paid");
+  }
+
+  if (paymentAmount > currentDue + 0.01) {
+    throw new ApiError(
+      400,
+      `Payment amount (${paymentAmount}) exceeds the remaining due (${currentDue})`
+    );
+  }
+
+  const newPaidAmount = entry.paid_amount + paymentAmount;
+  const newDueAmount = Math.max(0, currentDue - paymentAmount);
+  const newStatus =
+    newDueAmount <= 0.001 ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.PARTIAL;
+
+  const paymentDate = date ? new Date(date).toISOString() : new Date().toISOString();
+
+  // Insert payment history
+  const { data: paymentRecord, error: payError } = await supabase
+    .from("branch_finance_payments")
+    .insert({
+      finance_id: entryId,
+      branch_id: branchId,
+      amount: paymentAmount,
+      payment_date: paymentDate,
+      note: note?.trim() || "",
+      recorded_by: userId,
+    })
+    .select(`
+      id, finance_id, amount, payment_date, note, created_at,
+      recorded_by:users!recorded_by(id, full_name, user_name, avatar)
+    `)
+    .maybeSingle();
+
+  if (payError && payError.code !== "42P01") {
+    throw new ApiError(500, payError.message || "Failed to record payment");
+  }
+
+  // Update entry due amounts and status
+  const { data: updatedRaw, error: updateError } = await supabase
+    .from("branch_finances")
+    .update({
+      paid_amount: newPaidAmount,
+      due_amount: newDueAmount,
+      payment_status: newStatus,
+    })
+    .eq("id", entryId)
+    .select(`
+      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+      recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+      category:branch_finance_categories!category_id(id, name, type)
+    `)
+    .single();
+
+  if (updateError || !updatedRaw) {
+    throw new ApiError(500, updateError?.message || "Failed to update entry due balance");
+  }
+
+  const updatedEntry = mapEntryWithDue(updatedRaw);
+  const result = { entry: updatedEntry, payment: paymentRecord };
+  return result;
+};
+
+// GET PAYMENT INSTALLMENTS HISTORY FOR A TRANSACTION
+const getFinancePaymentsService = async (branchId, userId, entryId) => {
+  await requireBranchAdmin(branchId, userId);
+
+  const { data: payments, error } = await supabase
+    .from("branch_finance_payments")
+    .select(`
+      id, finance_id, amount, payment_date, note, created_at,
+      recorded_by:users!recorded_by(id, full_name, user_name, avatar)
+    `)
+    .eq("finance_id", entryId)
+    .order("payment_date", { ascending: true });
+
+  if (error && error.code === "42P01") {
+    const emptyResult = { payments: [] };
+    return emptyResult;
+  }
+
+  if (error) {
+    throw new ApiError(500, "Failed to fetch payment history");
+  }
+
+  const result = { payments: payments || [] };
+  return result;
+};
+
+// GET FINANCE ENTRIES (Paginated, Filtered & with Due/Payment info)
 const getFinanceEntriesService = async (branchId, userId, query) => {
   await requireBranchAdmin(branchId, userId);
 
-  const { type, category_id, page = 1, limit = 20, startDate, endDate } = query;
+  const {
+    type,
+    category_id,
+    payment_status,
+    page = 1,
+    limit = 20,
+    startDate,
+    endDate,
+  } = query;
 
-  let queryBuilder = supabase
-    .from("branch_finances")
-    .select(
-      `
-      id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
-      recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-      category:branch_finance_categories!category_id(id, name, type)
-    `,
-      { count: "exact" }
-    )
-    .eq("branch_id", branchId);
+  const selectColsWithDue = `
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+    recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+    category:branch_finance_categories!category_id(id, name, type)
+  `;
 
-  if (type === "INCOME" || type === "EXPENSE") {
-    queryBuilder = queryBuilder.eq("type", type);
-  }
-
-  if (category_id) {
-    queryBuilder = queryBuilder.eq("category_id", category_id);
-  }
-
-  if (startDate) {
-    queryBuilder = queryBuilder.gte("date", new Date(startDate).toISOString());
-  }
-
-  if (endDate) {
-    const end = new Date(endDate);
-    end.setHours(23, 59, 59, 999);
-    queryBuilder = queryBuilder.lte("date", end.toISOString());
-  }
+  const selectColsFallback = `
+    id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
+    recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+    category:branch_finance_categories!category_id(id, name, type)
+  `;
 
   const parsedPage = Number(page);
   const parsedLimit = Number(limit);
   const from = (parsedPage - 1) * parsedLimit;
   const to = from + parsedLimit - 1;
 
-  const {
-    data: entries,
-    error,
-    count,
-  } = await queryBuilder
-    .order("date", { ascending: false })
-    .order("created_at", { ascending: false })
-    .range(from, to);
+  let useFallback = false;
+
+  const buildQuery = (selectCols) => {
+    let qb = supabase
+      .from("branch_finances")
+      .select(selectCols, { count: "exact" })
+      .eq("branch_id", branchId);
+
+    if (type === FINANCE_TYPES.INCOME || type === FINANCE_TYPES.EXPENSE) {
+      qb = qb.eq("type", type);
+    }
+
+    if (category_id) {
+      qb = qb.eq("category_id", category_id);
+    }
+
+    if (payment_status && !useFallback) {
+      if (payment_status === "HAS_DUE") {
+        qb = qb.gt("due_amount", 0);
+      } else if (
+        payment_status === PAYMENT_STATUS.PAID ||
+        payment_status === PAYMENT_STATUS.PARTIAL ||
+        payment_status === PAYMENT_STATUS.DUE
+      ) {
+        qb = qb.eq("payment_status", payment_status);
+      }
+    }
+
+    if (startDate) {
+      qb = qb.gte("date", new Date(startDate).toISOString());
+    }
+
+    if (endDate) {
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+      qb = qb.lte("date", end.toISOString());
+    }
+
+    qb = qb
+      .order("date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .range(from, to);
+
+    return qb;
+  };
+
+  let { data: entries, error, count } = await buildQuery(selectColsWithDue);
+
+  if (error && error.code === "42703") {
+    useFallback = true;
+    const fallbackRes = await buildQuery(selectColsFallback);
+    entries = fallbackRes.data;
+    error = fallbackRes.error;
+    count = fallbackRes.count;
+  }
 
   if (error) {
     throw new ApiError(500, error.message || "Failed to fetch finance entries");
   }
 
+  const mappedEntries = (entries || []).map(mapEntryWithDue);
   const totalDocs = count ?? 0;
   const totalPages = Math.ceil(totalDocs / parsedLimit);
 
   const result = {
-    entries: entries || [],
+    entries: mappedEntries,
     pagination: {
       totalDocs,
       limit: parsedLimit,
@@ -284,44 +568,83 @@ const getFinanceEntriesService = async (branchId, userId, query) => {
   return result;
 };
 
-// GET FINANCE SUMMARY (Dashboard Overview)
+// GET FINANCE SUMMARY (Dashboard Overview with Cash, Due, Receivable & Payable)
 const getFinanceSummaryService = async (branchId, userId) => {
   await requireBranchAdmin(branchId, userId);
 
-  // 1. Fetch overall summary (Total Income, Total Expense)
-  const { data: overallData, error: overallError } = await supabase
+  // 1. Fetch overall summary data
+  let overallData = null;
+  const { data: fullData, error: fullError } = await supabase
     .from("branch_finances")
-    .select("type, amount")
+    .select("type, amount, total_amount, paid_amount, due_amount, payment_status, date")
     .eq("branch_id", branchId);
 
-  if (overallError) {
+  if (fullError && fullError.code === "42703") {
+    const { data: basicData, error: basicError } = await supabase
+      .from("branch_finances")
+      .select("type, amount, date")
+      .eq("branch_id", branchId);
+    if (basicError) {
+      throw new ApiError(500, "Failed to compute overall summary");
+    }
+    overallData = (basicData || []).map(mapEntryWithDue);
+  } else if (fullError) {
     throw new ApiError(500, "Failed to compute overall summary");
+  } else {
+    overallData = (fullData || []).map(mapEntryWithDue);
   }
 
   let totalIncome = 0;
   let totalExpense = 0;
-  if (overallData) {
-    for (const item of overallData) {
-      const amt = Number(item.amount);
-      if (item.type === "INCOME") {
-        totalIncome += amt;
-      } else {
-        totalExpense += amt;
-      }
+  let totalCashIn = 0;
+  let totalCashOut = 0;
+  let totalReceivable = 0;
+  let totalPayable = 0;
+
+  for (const item of overallData) {
+    const totalAmt = Number(item.total_amount);
+    const paidAmt = Number(item.paid_amount);
+    const dueAmt = Number(item.due_amount);
+
+    if (item.type === FINANCE_TYPES.INCOME) {
+      totalIncome += totalAmt;
+      totalCashIn += paidAmt;
+      totalReceivable += dueAmt;
+    } else {
+      totalExpense += totalAmt;
+      totalCashOut += paidAmt;
+      totalPayable += dueAmt;
     }
   }
 
+  const cashBalance = totalCashIn - totalCashOut;
+
   // 2. Fetch monthly stats
-  const { data: allTransactions, error: listError } = await supabase
+  let allTransactions = null;
+  const { data: txWithDue, error: txDueError } = await supabase
     .from("branch_finances")
     .select(
-      "type, amount, date, category:branch_finance_categories!category_id(name)"
+      "type, amount, total_amount, paid_amount, due_amount, payment_status, date, category:branch_finance_categories!category_id(name)"
     )
     .eq("branch_id", branchId)
     .order("date", { ascending: false });
 
-  if (listError) {
+  if (txDueError && txDueError.code === "42703") {
+    const { data: txBasic, error: txBasicErr } = await supabase
+      .from("branch_finances")
+      .select(
+        "type, amount, date, category:branch_finance_categories!category_id(name)"
+      )
+      .eq("branch_id", branchId)
+      .order("date", { ascending: false });
+    if (txBasicErr) {
+      throw new ApiError(500, "Failed to compute monthly summaries");
+    }
+    allTransactions = (txBasic || []).map(mapEntryWithDue);
+  } else if (txDueError) {
     throw new ApiError(500, "Failed to compute monthly summaries");
+  } else {
+    allTransactions = (txWithDue || []).map(mapEntryWithDue);
   }
 
   const monthlyGroups = {};
@@ -338,17 +661,27 @@ const getFinanceSummaryService = async (branchId, userId) => {
           month,
           income: 0,
           expense: 0,
+          cash_in: 0,
+          cash_out: 0,
+          receivable: 0,
+          payable: 0,
           breakdownMap: {},
         };
       }
 
-      const amt = Number(tx.amount);
+      const totalAmt = Number(tx.total_amount);
+      const paidAmt = Number(tx.paid_amount);
+      const dueAmt = Number(tx.due_amount);
       const categoryName = tx.category?.name || "Unknown";
 
-      if (tx.type === "INCOME") {
-        monthlyGroups[key].income += amt;
+      if (tx.type === FINANCE_TYPES.INCOME) {
+        monthlyGroups[key].income += totalAmt;
+        monthlyGroups[key].cash_in += paidAmt;
+        monthlyGroups[key].receivable += dueAmt;
       } else {
-        monthlyGroups[key].expense += amt;
+        monthlyGroups[key].expense += totalAmt;
+        monthlyGroups[key].cash_out += paidAmt;
+        monthlyGroups[key].payable += dueAmt;
       }
 
       const bdKey = `${categoryName}_${tx.type}`;
@@ -357,10 +690,14 @@ const getFinanceSummaryService = async (branchId, userId) => {
           category: categoryName,
           type: tx.type,
           total: 0,
+          paid: 0,
+          due: 0,
           count: 0,
         };
       }
-      monthlyGroups[key].breakdownMap[bdKey].total += amt;
+      monthlyGroups[key].breakdownMap[bdKey].total += totalAmt;
+      monthlyGroups[key].breakdownMap[bdKey].paid += paidAmt;
+      monthlyGroups[key].breakdownMap[bdKey].due += dueAmt;
       monthlyGroups[key].breakdownMap[bdKey].count += 1;
     }
   }
@@ -375,6 +712,11 @@ const getFinanceSummaryService = async (branchId, userId) => {
       month: m.month,
       income: m.income,
       expense: m.expense,
+      cash_in: m.cash_in,
+      cash_out: m.cash_out,
+      balance: m.cash_in - m.cash_out,
+      receivable: m.receivable,
+      payable: m.payable,
       breakdown,
     };
     return item;
@@ -384,7 +726,11 @@ const getFinanceSummaryService = async (branchId, userId) => {
     overall: {
       income: totalIncome,
       expense: totalExpense,
-      balance: totalIncome - totalExpense,
+      balance: cashBalance,
+      total_cash_in: totalCashIn,
+      total_cash_out: totalCashOut,
+      total_receivable: totalReceivable,
+      total_payable: totalPayable,
     },
     monthlyStats,
   };
@@ -402,17 +748,31 @@ const getFinanceCategoriesService = async (branchId, userId, query) => {
     .from("branch_finances")
     .select(
       `
-      id, type, amount, date,
+      id, type, amount, total_amount, paid_amount, due_amount, payment_status, date,
       category:branch_finance_categories!category_id(id, name, type)
     `
     )
     .eq("branch_id", branchId);
 
-  if (type === "INCOME" || type === "EXPENSE") {
+  if (type === FINANCE_TYPES.INCOME || type === FINANCE_TYPES.EXPENSE) {
     queryBuilder = queryBuilder.eq("type", type);
   }
 
-  const { data: entries, error } = await queryBuilder;
+  let { data: entries, error } = await queryBuilder;
+
+  if (error && error.code === "42703") {
+    const fallbackRes = await supabase
+      .from("branch_finances")
+      .select(
+        `
+        id, type, amount, date,
+        category:branch_finance_categories!category_id(id, name, type)
+      `
+      )
+      .eq("branch_id", branchId);
+    entries = fallbackRes.data;
+    error = fallbackRes.error;
+  }
 
   if (error) {
     throw new ApiError(500, "Failed to fetch categories breakdown");
@@ -420,7 +780,8 @@ const getFinanceCategoriesService = async (branchId, userId, query) => {
 
   const categoryMap = {};
   if (entries) {
-    for (const entry of entries) {
+    for (const raw of entries) {
+      const entry = mapEntryWithDue(raw);
       const catId = entry.category?.id;
       const catName = entry.category?.name || "Uncategorized";
       const catType = entry.category?.type || entry.type;
@@ -434,20 +795,27 @@ const getFinanceCategoriesService = async (branchId, userId, query) => {
           type: catType,
           income: 0,
           expense: 0,
+          paid: 0,
+          due: 0,
           balance: 0,
           count: 0,
         };
       }
 
-      const amt = Number(entry.amount);
-      categoryMap[catId].count += 1;
+      const totalAmt = Number(entry.total_amount);
+      const paidAmt = Number(entry.paid_amount);
+      const dueAmt = Number(entry.due_amount);
 
-      if (entry.type === "INCOME") {
-        categoryMap[catId].income += amt;
-        categoryMap[catId].balance += amt;
+      categoryMap[catId].count += 1;
+      categoryMap[catId].paid += paidAmt;
+      categoryMap[catId].due += dueAmt;
+
+      if (entry.type === FINANCE_TYPES.INCOME) {
+        categoryMap[catId].income += totalAmt;
+        categoryMap[catId].balance += paidAmt;
       } else {
-        categoryMap[catId].expense += amt;
-        categoryMap[catId].balance -= amt;
+        categoryMap[catId].expense += totalAmt;
+        categoryMap[catId].balance -= paidAmt;
       }
     }
   }
@@ -476,26 +844,42 @@ const getFinanceMonthExportService = async (branchId, userId, query) => {
     throw new ApiError(400, "Month must be between 1 and 12");
   }
 
-  // Fetch all transactions in the branch
-  const { data: entries, error } = await supabase
+  const selectCols = `
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+    recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+    category:branch_finance_categories!category_id(id, name, type)
+  `;
+
+  let { data: entries, error } = await supabase
     .from("branch_finances")
-    .select(
-      `
-      id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
-      recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-      category:branch_finance_categories!category_id(id, name, type)
-    `
-    )
+    .select(selectCols)
     .eq("branch_id", branchId)
     .order("date", { ascending: true })
     .order("created_at", { ascending: true });
+
+  if (error && error.code === "42703") {
+    const fallbackRes = await supabase
+      .from("branch_finances")
+      .select(`
+        id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
+        recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+        category:branch_finance_categories!category_id(id, name, type)
+      `)
+      .eq("branch_id", branchId)
+      .order("date", { ascending: true })
+      .order("created_at", { ascending: true });
+    entries = fallbackRes.data;
+    error = fallbackRes.error;
+  }
 
   if (error) {
     throw new ApiError(500, "Failed to retrieve monthly entries");
   }
 
-  // Filter in memory for specific year and month
-  const filteredEntries = (entries || []).filter((entry) => {
+  const mapped = (entries || []).map(mapEntryWithDue);
+
+  // Filter for specific year and month
+  const filteredEntries = mapped.filter((entry) => {
     const entryDate = new Date(entry.date);
     const matchesYear = entryDate.getFullYear() === year;
     const matchesMonth = entryDate.getMonth() + 1 === month;
@@ -504,12 +888,24 @@ const getFinanceMonthExportService = async (branchId, userId, query) => {
 
   let incomeTotal = 0;
   let expenseTotal = 0;
+  let cashInTotal = 0;
+  let cashOutTotal = 0;
+  let receivableTotal = 0;
+  let payableTotal = 0;
+
   for (const entry of filteredEntries) {
-    const amt = Number(entry.amount);
-    if (entry.type === "INCOME") {
-      incomeTotal += amt;
+    const totalAmt = Number(entry.total_amount);
+    const paidAmt = Number(entry.paid_amount);
+    const dueAmt = Number(entry.due_amount);
+
+    if (entry.type === FINANCE_TYPES.INCOME) {
+      incomeTotal += totalAmt;
+      cashInTotal += paidAmt;
+      receivableTotal += dueAmt;
     } else {
-      expenseTotal += amt;
+      expenseTotal += totalAmt;
+      cashOutTotal += paidAmt;
+      payableTotal += dueAmt;
     }
   }
 
@@ -520,7 +916,11 @@ const getFinanceMonthExportService = async (branchId, userId, query) => {
     summary: {
       income: incomeTotal,
       expense: expenseTotal,
-      balance: incomeTotal - expenseTotal,
+      cash_in: cashInTotal,
+      cash_out: cashOutTotal,
+      balance: cashInTotal - cashOutTotal,
+      receivable: receivableTotal,
+      payable: payableTotal,
       totalEntries: filteredEntries.length,
     },
   };
@@ -528,7 +928,6 @@ const getFinanceMonthExportService = async (branchId, userId, query) => {
   return result;
 };
 
-// DELETE FINANCE ENTRY
 // UPDATE FINANCE ENTRY
 const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
   await requireBranchAdmin(branchId, userId);
@@ -536,7 +935,7 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
   // Check if entry exists for this branch
   const { data: existing, error: findError } = await supabase
     .from("branch_finances")
-    .select("id")
+    .select("id, amount, total_amount, paid_amount, due_amount, payment_status")
     .eq("id", entryId)
     .eq("branch_id", branchId)
     .maybeSingle();
@@ -551,6 +950,9 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
   const {
     type,
     amount,
+    total_amount,
+    paid_amount,
+    payment_status,
     category_id,
     note,
     date,
@@ -559,17 +961,38 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
     details,
   } = data;
 
-  if (!type || amount === undefined || !category_id) {
+  const rawAmount = total_amount !== undefined ? total_amount : amount;
+  if (!type || rawAmount === undefined || !category_id) {
     throw new ApiError(400, "Type, amount, and category_id are required");
   }
 
-  if (type !== "INCOME" && type !== "EXPENSE") {
+  if (type !== FINANCE_TYPES.INCOME && type !== FINANCE_TYPES.EXPENSE) {
     throw new ApiError(400, "Type must be INCOME or EXPENSE");
   }
 
-  const parsedAmount = Number(amount);
-  if (isNaN(parsedAmount) || parsedAmount <= 0) {
+  const totalAmount = Number(rawAmount);
+  if (isNaN(totalAmount) || totalAmount <= 0) {
     throw new ApiError(400, "Amount must be greater than 0");
+  }
+
+  // Calculate status & due
+  let status = payment_status || existing.payment_status || PAYMENT_STATUS.PAID;
+  let paidAmt = Number(
+    paid_amount !== undefined
+      ? paid_amount
+      : existing.paid_amount !== undefined
+        ? existing.paid_amount
+        : totalAmount
+  );
+  if (status === PAYMENT_STATUS.PAID) {
+    paidAmt = totalAmount;
+  } else if (status === PAYMENT_STATUS.DUE) {
+    paidAmt = 0;
+  }
+
+  const dueAmt = Math.max(0, totalAmount - paidAmt);
+  if (dueAmt <= 0) {
+    status = PAYMENT_STATUS.PAID;
   }
 
   // Verify category exists and matches type and branch
@@ -594,47 +1017,86 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
       (sum, item) => sum + (Number(item.amount) || 0),
       0
     );
-    if (Math.abs(detailsSum - parsedAmount) > 0.01) {
+    if (Math.abs(detailsSum - totalAmount) > 0.01) {
       throw new ApiError(
         400,
-        `Total amount (${parsedAmount}) does not match the sum of item details (${detailsSum}).`
+        `Total amount (${totalAmount}) does not match the sum of item details (${detailsSum}).`
       );
     }
   }
 
-  const { data: updatedEntry, error: updateError } = await supabase
+  const updatePayload = {
+    type,
+    amount: totalAmount,
+    total_amount: totalAmount,
+    paid_amount: paidAmt,
+    due_amount: dueAmt,
+    payment_status: status,
+    category_id,
+    note: note?.trim() || "",
+    date: date ? new Date(date).toISOString() : new Date().toISOString(),
+    person_name: personName?.trim() || "",
+    person_phone: personPhone?.trim() || "",
+    details: details?.length > 0 ? details : [],
+  };
+
+  const selectCols = `
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+    recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+    category:branch_finance_categories!category_id(id, name, type)
+  `;
+
+  let updatedEntry = null;
+  const { data: updatedRaw, error: updateError } = await supabase
     .from("branch_finances")
-    .update({
+    .update(updatePayload)
+    .eq("id", entryId)
+    .select(selectCols)
+    .single();
+
+  if (updateError && updateError.code === "42703") {
+    const fallbackPayload = {
       type,
-      amount: parsedAmount,
+      amount: totalAmount,
       category_id,
       note: note?.trim() || "",
       date: date ? new Date(date).toISOString() : new Date().toISOString(),
       person_name: personName?.trim() || "",
       person_phone: personPhone?.trim() || "",
       details: details?.length > 0 ? details : [],
-    })
-    .eq("id", entryId)
-    .select(
-      `
-      id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
-      recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-      category:branch_finance_categories!category_id(id, name, type)
-    `
-    )
-    .single();
+    };
+    const { data: fallbackUpdated, error: fallbackError } = await supabase
+      .from("branch_finances")
+      .update(fallbackPayload)
+      .eq("id", entryId)
+      .select(`
+        id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
+        recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+        category:branch_finance_categories!category_id(id, name, type)
+      `)
+      .single();
 
-  if (updateError || !updatedEntry) {
+    if (fallbackError || !fallbackUpdated) {
+      throw new ApiError(
+        500,
+        fallbackError?.message || "Failed to update finance entry"
+      );
+    }
+    updatedEntry = mapEntryWithDue(fallbackUpdated);
+  } else if (updateError || !updatedRaw) {
     throw new ApiError(
       500,
       updateError?.message || "Failed to update finance entry"
     );
+  } else {
+    updatedEntry = mapEntryWithDue(updatedRaw);
   }
 
   const result = { entry: updatedEntry };
   return result;
 };
 
+// DELETE FINANCE ENTRY
 const deleteFinanceEntryService = async (branchId, userId, entryId) => {
   await requireBranchAdmin(branchId, userId);
 
@@ -675,6 +1137,8 @@ const branchFinanceServices = {
   getFinanceMonthExportService,
   updateFinanceEntryService,
   deleteFinanceEntryService,
+  recordFinancePaymentService,
+  getFinancePaymentsService,
 };
 
 export default branchFinanceServices;
