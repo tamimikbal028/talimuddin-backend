@@ -491,22 +491,31 @@ const getBranchDetailsService = async (branchId, userId) => {
     throw new ApiError(404, "Branch has been deleted");
   }
 
-  // Check membership
-  const { data: membership } = await supabase
-    .from("branch_memberships")
-    .select("*")
-    .eq("branch_id", branchId)
-    .eq("user_id", userId)
-    .maybeSingle();
+  // Check membership if user is authenticated
+  let membership = null;
+  let user = null;
+  let isCreator = false;
+  let isAdmin = false;
 
-  const { data: user } = await supabase
-    .from("users")
-    .select("user_type")
-    .eq("id", userId)
-    .maybeSingle();
+  if (userId) {
+    const { data: membershipData } = await supabase
+      .from("branch_memberships")
+      .select("*")
+      .eq("branch_id", branchId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    membership = membershipData;
 
-  const isCreator = branchRow.creator_id === userId;
-  const isAdmin = membership?.is_admin || false;
+    const { data: userData } = await supabase
+      .from("users")
+      .select("user_type")
+      .eq("id", userId)
+      .maybeSingle();
+    user = userData;
+
+    isCreator = branchRow.creator_id === userId;
+    isAdmin = membership?.is_admin || false;
+  }
 
   const meta = {
     is_member: !!membership,

@@ -71,4 +71,58 @@ const verifyJWT = AsyncHandler(async (req, res, next) => {
   }
 });
 
-export { verifyJWT };
+const optionalAuth = AsyncHandler(async (req, _, next) => {
+  try {
+    const token =
+      req.cookies?.accessToken ||
+      req.header("Authorization")?.replace("Bearer ", "");
+
+    if (!token) {
+      req.user = null;
+      return next();
+    }
+
+    const decodedToken = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+    const userId = decodedToken.id;
+
+    if (!userId) {
+      req.user = null;
+      return next();
+    }
+
+    const { data: userData, error: dbError } = await supabase
+      .from("users")
+      .select(AUTH_USER_DB_SELECT)
+      .eq("id", userId)
+      .single();
+
+    if (
+      dbError ||
+      !userData ||
+      userData.account_status === ACCOUNT_STATUS.DELETED
+    ) {
+      req.user = null;
+      return next();
+    }
+
+    if (userData.password_changed_at) {
+      const changedTimestamp = parseInt(
+        new Date(userData.password_changed_at).getTime() / 1000,
+        10
+      );
+      if (changedTimestamp > decodedToken.iat) {
+        req.user = null;
+        return next();
+      }
+    }
+
+    req.user = userData;
+    next();
+  } catch {
+    // In optional auth, invalid/expired tokens just degrade to unauthenticated guest
+    req.user = null;
+    next();
+  }
+});
+
+export { verifyJWT, optionalAuth };

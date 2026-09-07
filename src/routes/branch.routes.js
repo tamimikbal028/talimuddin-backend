@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { verifyJWT } from "../middlewares/auth.middleware.js";
+import { verifyJWT, optionalAuth } from "../middlewares/auth.middleware.js";
 import { validate } from "../middlewares/validate.middleware.js";
 import {
   createBranchSchema,
@@ -14,52 +14,84 @@ import branchControllers from "../controllers/branch.controller.js";
 import branchFinanceRouter from "./branchFinance.routes.js";
 
 const router = Router();
-router.use(verifyJWT);
 
-// Branch Finance Sub-Routes
-router.use("/:branchId/finance", branchFinanceRouter);
+// ==========================================
+// 1. PUBLIC ROUTES (with optional auth)
+// ==========================================
+// All branches listing (supports search/filtering, guest visible)
+router.get("/", optionalAuth, branchControllers.getAllBranches);
+router.get("/search", optionalAuth, branchControllers.searchBranches);
+router.get("/main-branches", optionalAuth, branchControllers.getMainBranches);
+// Branch details (About tab viewable by anyone, unauthenticated meta populated safely)
+router.get("/:branchId", optionalAuth, branchControllers.getBranchDetails);
 
-// Branch User Search (For appointing branch roles)
-router.get("/users/search", branchControllers.searchUsers);
+// ==========================================
+// 2. PROTECTED ROUTES (Requires valid login)
+// ==========================================
+// Branch Finance Sub-Routes (Strictly guarded)
+router.use("/:branchId/finance", verifyJWT, branchFinanceRouter);
 
-// Branch CRUD Routes
-router.post("/", validate(createBranchSchema), branchControllers.createBranch);
-router.get("/", branchControllers.getAllBranches);
-router.get("/myBranches", branchControllers.getMyBranches);
-router.get("/search", branchControllers.searchBranches);
-router.get("/main-branches", branchControllers.getMainBranches);
-router.post("/join", validate(joinBranchSchema), branchControllers.joinBranch);
+// Branch User Search (For appointing branch roles - App Admin only)
+router.get("/users/search", verifyJWT, branchControllers.searchUsers);
 
-// Branch Details Routes
-router.get("/:branchId", branchControllers.getBranchDetails);
+// My Branches (User's joined branches)
+router.get("/myBranches", verifyJWT, branchControllers.getMyBranches);
+
+// Branch Creation & Joining
+router.post(
+  "/",
+  verifyJWT,
+  validate(createBranchSchema),
+  branchControllers.createBranch
+);
+router.post(
+  "/join",
+  verifyJWT,
+  validate(joinBranchSchema),
+  branchControllers.joinBranch
+);
+
+// Branch Admin Appointment
 router.post(
   "/:branchId/admins",
+  verifyJWT,
   validate(addBranchAdminSchema),
   branchControllers.addBranchAdmin
 );
-router.get("/:branchId/members", branchControllers.getBranchMembers);
+
+// Branch Members (Strictly guarded - only members/admins)
+router.get("/:branchId/members", verifyJWT, branchControllers.getBranchMembers);
 router.post(
   "/:branchId/members",
+  verifyJWT,
   validate(addMemberSchema),
   branchControllers.addMember
 );
 router.patch(
   "/:branchId/members/:memberId",
+  verifyJWT,
   validate(updateMemberSchema),
   branchControllers.updateMember
 );
-router.delete("/:branchId/members/:memberId", branchControllers.removeMember);
+router.delete(
+  "/:branchId/members/:memberId",
+  verifyJWT,
+  branchControllers.removeMember
+);
 
+// Branch Edit & Delete (Creator / App Admin)
 router.patch(
   "/:branchId",
+  verifyJWT,
   validate(updateBranchSchema),
   branchControllers.updateBranch
 );
-router.delete("/:branchId", branchControllers.deleteBranch);
+router.delete("/:branchId", verifyJWT, branchControllers.deleteBranch);
 
 // Admin Member Action Routes (legacy userId in body)
 router.delete(
   "/:branchId/remove",
+  verifyJWT,
   validate(userIdBodySchema),
   branchControllers.removeMember
 );

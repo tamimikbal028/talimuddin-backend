@@ -76,7 +76,7 @@ const getBranchDetails = AsyncHandler(async (req, res) => {
   const { branchId } = req.params;
   const { branch, meta } = await branchServices.getBranchDetailsService(
     branchId,
-    req.user.id
+    req.user?.id
   );
 
   return res
