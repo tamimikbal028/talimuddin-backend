@@ -24,6 +24,7 @@ router.get("/users/search", branchControllers.searchUsers);
 
 // Branch CRUD Routes
 router.post("/", validate(createBranchSchema), branchControllers.createBranch);
+router.get("/", branchControllers.getAllBranches);
 router.get("/myBranches", branchControllers.getMyBranches);
 router.get("/search", branchControllers.searchBranches);
 router.get("/main-branches", branchControllers.getMainBranches);

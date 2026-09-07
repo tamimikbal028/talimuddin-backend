@@ -361,6 +361,43 @@ const getMyBranchesService = async (userId, queryParams) => {
   return { branches, pagination: buildPagination(page, limit, count ?? 0) };
 };
 
+// GET ALL BRANCHES (All active branches for directory)
+const getAllBranchesService = async (queryParams) => {
+  const { page, limit, from, to } = getPaginationParams(queryParams);
+
+  const {
+    data: branchesData,
+    error,
+    count,
+  } = await supabase
+    .from("branches")
+    .select(
+      `
+      id, name, cover_image, is_deleted, branch_type,
+      creator:users!creator_id(id, full_name, user_name, avatar)
+    `,
+      { count: "exact" }
+    )
+    .eq("is_deleted", false)
+    .order("created_at", { ascending: false })
+    .range(from, to);
+
+  if (error) throw new ApiError(500, error.message);
+
+  const branches = (branchesData || []).map((branch) => ({
+    id: branch.id,
+    name: branch.name,
+    cover_image: branch.cover_image,
+    branch_type: branch.branch_type || BRANCH_TYPES.MAIN,
+    creator: {
+      full_name: branch.creator?.full_name,
+      user_name: branch.creator?.user_name,
+    },
+  }));
+
+  return { branches, pagination: buildPagination(page, limit, count ?? 0) };
+};
+
 // SEARCH BRANCHES
 const searchBranchesService = async (query) => {
   let builder = supabase
@@ -838,7 +875,10 @@ const searchUsersService = async (query, requesterId) => {
     .maybeSingle();
 
   if (reqErr || !requester || requester.user_type !== "ADMIN") {
-    throw new ApiError(403, "Only app administrators can search users to assign roles");
+    throw new ApiError(
+      403,
+      "Only app administrators can search users to assign roles"
+    );
   }
 
   let builder = supabase
@@ -908,7 +948,10 @@ const addBranchAdminService = async (branchId, requesterId, targetUserId) => {
     .maybeSingle();
 
   if (memErr) {
-    throw new ApiError(500, memErr.message || "Failed to verify membership status");
+    throw new ApiError(
+      500,
+      memErr.message || "Failed to verify membership status"
+    );
   }
 
   if (existingMembership) {
@@ -929,7 +972,10 @@ const addBranchAdminService = async (branchId, requesterId, targetUserId) => {
       .eq("id", existingMembership.id);
 
     if (updateError) {
-      throw new ApiError(500, updateError.message || "Failed to update member to admin");
+      throw new ApiError(
+        500,
+        updateError.message || "Failed to update member to admin"
+      );
     }
   } else {
     // Insert new membership record as admin
@@ -946,7 +992,10 @@ const addBranchAdminService = async (branchId, requesterId, targetUserId) => {
       });
 
     if (insertError) {
-      throw new ApiError(500, insertError.message || "Failed to add user as branch admin");
+      throw new ApiError(
+        500,
+        insertError.message || "Failed to add user as branch admin"
+      );
     }
   }
 
@@ -974,6 +1023,7 @@ const branchServices = {
 
   // Branch Info & Lists
   getMyBranchesService,
+  getAllBranchesService,
   getMainBranchesService,
   getBranchDetailsService,
   searchBranchesService,

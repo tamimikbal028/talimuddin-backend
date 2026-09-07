@@ -276,8 +276,26 @@ const addBranchAdmin = AsyncHandler(async (req, res) => {
     .json(new ApiResponse(201, result, "Branch admin added successfully"));
 });
 
+// ==========================================
+// 17. GET ALL BRANCHES
+// ==========================================
+const getAllBranches = AsyncHandler(async (req, res) => {
+  const result = await branchServices.getAllBranchesService(req.query);
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { branches: result.branches, pagination: result.pagination },
+        "All branches fetched successfully"
+      )
+    );
+});
+
 const branchControllers = {
   createBranch,
+  getAllBranches,
   getMyBranches,
   searchBranches,
   getMainBranches,
