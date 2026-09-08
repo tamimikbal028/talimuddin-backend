@@ -35,7 +35,14 @@ const requireBranchAdmin = async (branchId, userId, options = {}) => {
   const isAdmin = membership?.is_admin === true;
   const isModerator = membership?.is_moderator === true;
 
-  if (options.requireStrictAdmin) {
+  if (options.requireBranchStaff) {
+    if (!isAdmin && !isModerator) {
+      throw new ApiError(
+        403,
+        "Only branch administrators or moderators can perform this action"
+      );
+    }
+  } else if (options.requireStrictAdmin) {
     if (!isAdmin && !isAppAdmin) {
       throw new ApiError(
         403,
@@ -54,7 +61,6 @@ const requireBranchAdmin = async (branchId, userId, options = {}) => {
   const result = { isAdmin, isAppAdmin, isModerator };
   return result;
 };
-
 
 // Helper to normalize entry object with due and payment fields
 const mapEntryWithDue = (entry) => {
@@ -112,7 +118,7 @@ const getCategoriesListService = async (branchId, userId) => {
 
 // CREATE A NEW CATEGORY FOR THE BRANCH
 const createCategoryService = async (branchId, userId, { name, type }) => {
-  await requireBranchAdmin(branchId, userId);
+  await requireBranchAdmin(branchId, userId, { requireBranchStaff: true });
 
   if (!name || !type) {
     throw new ApiError(400, "Category name and type are required");
@@ -170,7 +176,7 @@ const createCategoryService = async (branchId, userId, { name, type }) => {
 
 // CREATE FINANCE ENTRY (WITH OPTIONAL DUE & PAYMENT STATUS)
 const createFinanceEntryService = async (branchId, userId, data) => {
-  await requireBranchAdmin(branchId, userId);
+  await requireBranchAdmin(branchId, userId, { requireBranchStaff: true });
 
   const {
     type,
@@ -307,11 +313,13 @@ const createFinanceEntryService = async (branchId, userId, data) => {
     const { data: fallbackInserted, error: fallbackError } = await supabase
       .from("branch_finances")
       .insert(fallbackPayload)
-      .select(`
+      .select(
+        `
         id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
         recorded_by:users!recorded_by(id, full_name, user_name, avatar),
         category:branch_finance_categories!category_id(id, name, type)
-      `)
+      `
+      )
       .single();
 
     if (fallbackError || !fallbackInserted) {
@@ -360,7 +368,9 @@ const recordFinancePaymentService = async (branchId, userId, entryId, data) => {
   // Fetch target entry
   const { data: rawEntry, error: findError } = await supabase
     .from("branch_finances")
-    .select("id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status")
+    .select(
+      "id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status"
+    )
     .eq("id", entryId)
     .eq("branch_id", branchId)
     .maybeSingle();
@@ -373,7 +383,10 @@ const recordFinancePaymentService = async (branchId, userId, entryId, data) => {
   }
 
   if (findError || !rawEntry) {
-    throw new ApiError(404, "Finance entry not found or doesn't belong to this branch");
+    throw new ApiError(
+      404,
+      "Finance entry not found or doesn't belong to this branch"
+    );
   }
 
   const entry = mapEntryWithDue(rawEntry);
@@ -395,7 +408,9 @@ const recordFinancePaymentService = async (branchId, userId, entryId, data) => {
   const newStatus =
     newDueAmount <= 0.001 ? PAYMENT_STATUS.PAID : PAYMENT_STATUS.PARTIAL;
 
-  const paymentDate = date ? new Date(date).toISOString() : new Date().toISOString();
+  const paymentDate = date
+    ? new Date(date).toISOString()
+    : new Date().toISOString();
 
   // Insert payment history
   const { data: paymentRecord, error: payError } = await supabase
@@ -408,10 +423,12 @@ const recordFinancePaymentService = async (branchId, userId, entryId, data) => {
       note: note?.trim() || "",
       recorded_by: userId,
     })
-    .select(`
+    .select(
+      `
       id, finance_id, amount, payment_date, note, created_at,
       recorded_by:users!recorded_by(id, full_name, user_name, avatar)
-    `)
+    `
+    )
     .maybeSingle();
 
   if (payError && payError.code !== "42P01") {
@@ -427,15 +444,20 @@ const recordFinancePaymentService = async (branchId, userId, entryId, data) => {
       payment_status: newStatus,
     })
     .eq("id", entryId)
-    .select(`
+    .select(
+      `
       id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
       recorded_by:users!recorded_by(id, full_name, user_name, avatar),
       category:branch_finance_categories!category_id(id, name, type)
-    `)
+    `
+    )
     .single();
 
   if (updateError || !updatedRaw) {
-    throw new ApiError(500, updateError?.message || "Failed to update entry due balance");
+    throw new ApiError(
+      500,
+      updateError?.message || "Failed to update entry due balance"
+    );
   }
 
   const updatedEntry = mapEntryWithDue(updatedRaw);
@@ -449,10 +471,12 @@ const getFinancePaymentsService = async (branchId, userId, entryId) => {
 
   const { data: payments, error } = await supabase
     .from("branch_finance_payments")
-    .select(`
+    .select(
+      `
       id, finance_id, amount, payment_date, note, created_at,
       recorded_by:users!recorded_by(id, full_name, user_name, avatar)
-    `)
+    `
+    )
     .eq("finance_id", entryId)
     .order("payment_date", { ascending: true });
 
@@ -587,7 +611,9 @@ const getFinanceSummaryService = async (branchId, userId) => {
   let overallData = null;
   const { data: fullData, error: fullError } = await supabase
     .from("branch_finances")
-    .select("type, amount, total_amount, paid_amount, due_amount, payment_status, date")
+    .select(
+      "type, amount, total_amount, paid_amount, due_amount, payment_status, date"
+    )
     .eq("branch_id", branchId);
 
   if (fullError && fullError.code === "42703") {
@@ -871,11 +897,13 @@ const getFinanceMonthExportService = async (branchId, userId, query) => {
   if (error && error.code === "42703") {
     const fallbackRes = await supabase
       .from("branch_finances")
-      .select(`
+      .select(
+        `
         id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
         recorded_by:users!recorded_by(id, full_name, user_name, avatar),
         category:branch_finance_categories!category_id(id, name, type)
-      `)
+      `
+      )
       .eq("branch_id", branchId)
       .order("date", { ascending: true })
       .order("created_at", { ascending: true });
@@ -946,7 +974,9 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
   // Check if entry exists for this branch
   const { data: existing, error: findError } = await supabase
     .from("branch_finances")
-    .select("id, recorded_by, amount, total_amount, paid_amount, due_amount, payment_status")
+    .select(
+      "id, recorded_by, amount, total_amount, paid_amount, due_amount, payment_status"
+    )
     .eq("id", entryId)
     .eq("branch_id", branchId)
     .maybeSingle();
@@ -965,7 +995,6 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
       "Only the user who created this entry can edit or delete it"
     );
   }
-
 
   const {
     type,
@@ -1089,11 +1118,13 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
       .from("branch_finances")
       .update(fallbackPayload)
       .eq("id", entryId)
-      .select(`
+      .select(
+        `
         id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
         recorded_by:users!recorded_by(id, full_name, user_name, avatar),
         category:branch_finance_categories!category_id(id, name, type)
-      `)
+      `
+      )
       .single();
 
     if (fallbackError || !fallbackUpdated) {
@@ -1141,7 +1172,6 @@ const deleteFinanceEntryService = async (branchId, userId, entryId) => {
       "Only the user who created this entry can edit or delete it"
     );
   }
-
 
   const { error: deleteError } = await supabase
     .from("branch_finances")
