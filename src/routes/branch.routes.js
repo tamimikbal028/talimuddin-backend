@@ -57,22 +57,37 @@ router.post(
   branchControllers.joinBranch
 );
 
-// Branch Admin Appointment
+// Branch Admin Routes
+router.get("/:branchId/admins", verifyJWT, branchControllers.getBranchAdmins);
 router.post(
   "/:branchId/admins",
   verifyJWT,
   validate(addBranchAdminSchema),
   branchControllers.addBranchAdmin
 );
+router.delete(
+  "/:branchId/admins/:memberId",
+  verifyJWT,
+  branchControllers.removeBranchAdmin
+);
 
-// Branch Moderator Appointment (Branch Admin / App Admin)
+// Branch Moderator Routes
+router.get(
+  "/:branchId/moderators",
+  verifyJWT,
+  branchControllers.getBranchModerators
+);
 router.post(
   "/:branchId/moderators",
   verifyJWT,
   validate(addBranchModeratorSchema),
   branchControllers.addBranchModerator
 );
-
+router.delete(
+  "/:branchId/moderators/:memberId",
+  verifyJWT,
+  branchControllers.removeBranchModerator
+);
 
 // Branch Members (Strictly guarded - only members/admins)
 router.get("/:branchId/members", verifyJWT, branchControllers.getBranchMembers);

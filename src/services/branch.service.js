@@ -1245,6 +1245,174 @@ const addBranchModeratorService = async (
   return result;
 };
 
+// GET BRANCH ADMINS
+const getBranchAdminsService = async (branchId) => {
+  const { data: branch, error: branchErr } = await supabase
+    .from("branches")
+    .select("id, is_deleted")
+    .eq("id", branchId)
+    .maybeSingle();
+
+  if (branchErr || !branch || branch.is_deleted) {
+    throw new ApiError(404, "Branch not found or has been deleted");
+  }
+
+  const { data: admins, error } = await supabase
+    .from("branch_memberships")
+    .select(
+      `
+      id,
+      user_id,
+      is_admin,
+      created_at,
+      user:users!user_id(id, full_name, user_name, email, avatar)
+    `
+    )
+    .eq("branch_id", branchId)
+    .eq("is_admin", true)
+    .eq("is_deleted", false)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    throw new ApiError(500, error.message || "Failed to fetch branch admins");
+  }
+
+  return { admins: admins || [] };
+};
+
+// GET BRANCH MODERATORS
+const getBranchModeratorsService = async (branchId) => {
+  const { data: branch, error: branchErr } = await supabase
+    .from("branches")
+    .select("id, is_deleted")
+    .eq("id", branchId)
+    .maybeSingle();
+
+  if (branchErr || !branch || branch.is_deleted) {
+    throw new ApiError(404, "Branch not found or has been deleted");
+  }
+
+  const { data: moderators, error } = await supabase
+    .from("branch_memberships")
+    .select(
+      `
+      id,
+      user_id,
+      is_moderator,
+      created_at,
+      user:users!user_id(id, full_name, user_name, email, avatar)
+    `
+    )
+    .eq("branch_id", branchId)
+    .eq("is_moderator", true)
+    .eq("is_deleted", false)
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    if (error.code === "42703") {
+      return { moderators: [] };
+    }
+    throw new ApiError(500, error.message || "Failed to fetch branch moderators");
+  }
+
+  return { moderators: moderators || [] };
+};
+
+// REMOVE BRANCH ADMIN (App Admin ONLY)
+const removeBranchAdminService = async (branchId, requesterId, targetMemberId) => {
+  // 1. Verify requester is App Admin
+  const { data: requester, error: reqErr } = await supabase
+    .from("users")
+    .select("user_type")
+    .eq("id", requesterId)
+    .maybeSingle();
+
+  if (reqErr || !requester || requester.user_type !== "ADMIN") {
+    throw new ApiError(403, "Only app administrators can remove branch admins");
+  }
+
+  // 2. Find target membership
+  const { data: targetMembership, error: targetErr } = await supabase
+    .from("branch_memberships")
+    .select("id, user_id, is_admin, is_deleted")
+    .eq("id", targetMemberId)
+    .eq("branch_id", branchId)
+    .maybeSingle();
+
+  if (targetErr || !targetMembership || targetMembership.is_deleted || !targetMembership.is_admin) {
+    throw new ApiError(404, "Branch admin not found in this branch");
+  }
+
+  // 3. Delete membership
+  const { error: delErr } = await supabase
+    .from("branch_memberships")
+    .delete()
+    .eq("id", targetMembership.id);
+
+  if (delErr) {
+    throw new ApiError(500, delErr.message || "Failed to remove branch admin");
+  }
+
+  return { member_id: targetMembership.id, user_id: targetMembership.user_id };
+};
+
+// REMOVE BRANCH MODERATOR (Branch Admin ONLY)
+const removeBranchModeratorService = async (
+  branchId,
+  requesterId,
+  targetMemberId
+) => {
+  // 1. Verify requester is Branch Admin of this branch (Only Branch Admin, not App Admin)
+  const { data: requesterMembership } = await supabase
+    .from("branch_memberships")
+    .select("is_admin")
+    .eq("branch_id", branchId)
+    .eq("user_id", requesterId)
+    .eq("is_deleted", false)
+    .maybeSingle();
+
+  const isBranchAdmin = requesterMembership?.is_admin === true;
+
+  if (!isBranchAdmin) {
+    throw new ApiError(
+      403,
+      "Only branch administrators can remove moderators from this branch"
+    );
+  }
+
+  // 2. Find target membership
+  const { data: targetMembership, error: targetErr } = await supabase
+    .from("branch_memberships")
+    .select("id, user_id, is_moderator, is_deleted")
+    .eq("id", targetMemberId)
+    .eq("branch_id", branchId)
+    .maybeSingle();
+
+  if (
+    targetErr ||
+    !targetMembership ||
+    targetMembership.is_deleted ||
+    !targetMembership.is_moderator
+  ) {
+    throw new ApiError(404, "Branch moderator not found in this branch");
+  }
+
+  // 3. Delete membership
+  const { error: delErr } = await supabase
+    .from("branch_memberships")
+    .delete()
+    .eq("id", targetMembership.id);
+
+  if (delErr) {
+    throw new ApiError(
+      500,
+      delErr.message || "Failed to remove branch moderator"
+    );
+  }
+
+  return { member_id: targetMembership.id, user_id: targetMembership.user_id };
+};
+
 const branchServices = {
   // Branch Actions
   createBranchService,
@@ -1256,6 +1424,10 @@ const branchServices = {
   updateMemberService,
   addBranchAdminService,
   addBranchModeratorService,
+  getBranchAdminsService,
+  getBranchModeratorsService,
+  removeBranchAdminService,
+  removeBranchModeratorService,
 
   // Branch Info & Lists
   getMyBranchesService,

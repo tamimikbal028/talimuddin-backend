@@ -14,9 +14,7 @@ const createBranch = AsyncHandler(async (req, res) => {
 
   return res
     .status(201)
-    .json(
-      new ApiResponse(201, { branch }, "Branch created successfully")
-    );
+    .json(new ApiResponse(201, { branch }, "Branch created successfully"));
 });
 
 // ==========================================
@@ -176,7 +174,6 @@ const getBranchMembers = AsyncHandler(async (req, res) => {
   );
 });
 
-
 // ==========================================
 // 10. REMOVE MEMBER
 // ==========================================
@@ -246,9 +243,7 @@ const updateMember = AsyncHandler(async (req, res) => {
 // ==========================================
 const searchUsers = AsyncHandler(async (req, res) => {
   const query =
-    typeof req.query.query === "string"
-      ? req.query.query
-      : req.query.q || "";
+    typeof req.query.query === "string" ? req.query.query : req.query.q || "";
   const branchId = req.query.branchId || req.query.branch_id || null;
 
   const { users } = await branchServices.searchUsersService(
@@ -261,7 +256,6 @@ const searchUsers = AsyncHandler(async (req, res) => {
     .status(200)
     .json(new ApiResponse(200, { users }, "Users searched successfully"));
 });
-
 
 // ==========================================
 // 16. ADD BRANCH ADMIN (App Admin only)
@@ -316,6 +310,72 @@ const getAllBranches = AsyncHandler(async (req, res) => {
     );
 });
 
+// ==========================================
+// 19. GET BRANCH ADMINS
+// ==========================================
+const getBranchAdmins = AsyncHandler(async (req, res) => {
+  const { branchId } = req.params;
+  const result = await branchServices.getBranchAdminsService(
+    branchId,
+    req.user.id
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Branch admins fetched successfully"));
+});
+
+// ==========================================
+// 20. GET BRANCH MODERATORS
+// ==========================================
+const getBranchModerators = AsyncHandler(async (req, res) => {
+  const { branchId } = req.params;
+  const result = await branchServices.getBranchModeratorsService(
+    branchId,
+    req.user.id
+  );
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(200, result, "Branch moderators fetched successfully")
+    );
+});
+
+// ==========================================
+// 21. REMOVE BRANCH ADMIN
+// ==========================================
+const removeBranchAdmin = AsyncHandler(async (req, res) => {
+  const { branchId, memberId } = req.params;
+  const result = await branchServices.removeBranchAdminService(
+    branchId,
+    req.user.id,
+    memberId
+  );
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, result, "Branch admin removed successfully"));
+});
+
+// ==========================================
+// 22. REMOVE BRANCH MODERATOR
+// ==========================================
+const removeBranchModerator = AsyncHandler(async (req, res) => {
+  const { branchId, memberId } = req.params;
+  const result = await branchServices.removeBranchModeratorService(
+    branchId,
+    req.user.id,
+    memberId
+  );
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(200, result, "Branch moderator removed successfully")
+    );
+});
+
 const branchControllers = {
   createBranch,
   getAllBranches,
@@ -333,7 +393,10 @@ const branchControllers = {
   searchUsers,
   addBranchAdmin,
   addBranchModerator,
+  getBranchAdmins,
+  getBranchModerators,
+  removeBranchAdmin,
+  removeBranchModerator,
 };
 
 export default branchControllers;
-
