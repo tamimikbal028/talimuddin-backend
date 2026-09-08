@@ -147,12 +147,14 @@ const getFinanceMonthExport = AsyncHandler(async (req, res) => {
 const updateFinanceEntry = AsyncHandler(async (req, res) => {
   const { branchId, entryId } = req.params;
   const userId = req.user.id;
+  const actionCode = req.body?.actionCode || req.headers["x-action-code"];
 
   const { entry } = await branchFinanceServices.updateFinanceEntryService(
     branchId,
     userId,
     entryId,
-    req.body
+    req.body,
+    actionCode
   );
 
   const response = res
@@ -165,16 +167,22 @@ const updateFinanceEntry = AsyncHandler(async (req, res) => {
 const deleteFinanceEntry = AsyncHandler(async (req, res) => {
   const { branchId, entryId } = req.params;
   const userId = req.user.id;
+  const actionCode =
+    req.body?.actionCode || req.headers["x-action-code"] || req.query?.actionCode;
 
-  const { entryId: deletedId } = await branchFinanceServices.deleteFinanceEntryService(
-    branchId,
-    userId,
-    entryId
-  );
+  const { entryId: deletedId } =
+    await branchFinanceServices.deleteFinanceEntryService(
+      branchId,
+      userId,
+      entryId,
+      actionCode
+    );
 
   const response = res
     .status(200)
-    .json(new ApiResponse(200, { entryId: deletedId }, "Finance entry deleted successfully"));
+    .json(
+      new ApiResponse(200, { entryId: deletedId }, "Finance entry deleted successfully")
+    );
 
   return response;
 });
@@ -214,6 +222,49 @@ const getFinancePayments = AsyncHandler(async (req, res) => {
   return response;
 });
 
+const getBranchActionCode = AsyncHandler(async (req, res) => {
+  const { branchId } = req.params;
+  const userId = req.user.id;
+
+  const { actionCode } = await branchFinanceServices.getBranchActionCodeService(
+    branchId,
+    userId
+  );
+
+  const response = res
+    .status(200)
+    .json(
+      new ApiResponse(200, { actionCode }, "Action code retrieved successfully")
+    );
+
+  return response;
+});
+
+const updateBranchActionCode = AsyncHandler(async (req, res) => {
+  const { branchId } = req.params;
+  const userId = req.user.id;
+  const { actionCode } = req.body;
+
+  const { actionCode: updatedCode } =
+    await branchFinanceServices.updateBranchActionCodeService(
+      branchId,
+      userId,
+      actionCode
+    );
+
+  const response = res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        { actionCode: updatedCode },
+        "Action code updated successfully"
+      )
+    );
+
+  return response;
+});
+
 const branchFinanceControllers = {
   getCategoriesList,
   createCategory,
@@ -226,6 +277,8 @@ const branchFinanceControllers = {
   deleteFinanceEntry,
   recordFinancePayment,
   getFinancePayments,
+  getBranchActionCode,
+  updateBranchActionCode,
 };
 
 export default branchFinanceControllers;

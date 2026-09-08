@@ -68,6 +68,7 @@ create table if not exists public.branches (
   parent_branch_id uuid references public.branches(id) on delete set null,
   is_deleted boolean not null default false,
   members_count integer not null default 0 check (members_count >= 0),
+  finance_action_code text not null default '1234',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );

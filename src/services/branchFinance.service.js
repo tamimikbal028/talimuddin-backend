@@ -7,7 +7,7 @@ const requireBranchAdmin = async (branchId, userId, options = {}) => {
   // 1. Fetch Branch
   const { data: branch, error: branchError } = await supabase
     .from("branches")
-    .select("id, is_deleted")
+    .select("id, is_deleted, finance_action_code")
     .eq("id", branchId)
     .maybeSingle();
 
@@ -58,7 +58,7 @@ const requireBranchAdmin = async (branchId, userId, options = {}) => {
     }
   }
 
-  const result = { isAdmin, isAppAdmin, isModerator };
+  const result = { isAdmin, isAppAdmin, isModerator, branch };
   return result;
 };
 
@@ -1035,8 +1035,18 @@ const getFinanceMonthExportService = async (branchId, userId, query) => {
 };
 
 // UPDATE FINANCE ENTRY
-const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
-  await requireBranchAdmin(branchId, userId);
+const updateFinanceEntryService = async (
+  branchId,
+  userId,
+  entryId,
+  data,
+  actionCode
+) => {
+  const { isAdmin, isModerator, branch } = await requireBranchAdmin(
+    branchId,
+    userId,
+    { requireBranchStaff: true }
+  );
 
   // Check if entry exists for this branch
   const { data: existing, error: findError } = await supabase
@@ -1055,12 +1065,26 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
     );
   }
 
-  // Universal check: ONLY the user who created this entry can edit it
-  if (existing.recorded_by !== userId) {
-    throw new ApiError(
-      403,
-      "Only the user who created this entry can edit or delete it"
-    );
+  // Permission & Action Code Check:
+  // Branch Admin: Can edit directly (no code required).
+  // Moderator: Must provide the branch's finance_action_code.
+  if (!isAdmin) {
+    if (isModerator) {
+      const requiredCode = branch?.finance_action_code || "1234";
+      const providedCode =
+        typeof actionCode === "string" ? actionCode.trim() : "";
+      if (!providedCode || providedCode !== requiredCode) {
+        throw new ApiError(
+          403,
+          "ভুল সিকিউরিটি কোড! এন্ট্রি এডিট করতে ব্রাঞ্চ এডমিনের অনুমোদিত কোড প্রয়োজন।"
+        );
+      }
+    } else {
+      throw new ApiError(
+        403,
+        "শুধুমাত্র ব্রাঞ্চ এডমিন বা অনুমোদিত মডারেটর এডিট করতে পারবেন"
+      );
+    }
   }
 
   const {
@@ -1215,8 +1239,17 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
 };
 
 // DELETE FINANCE ENTRY
-const deleteFinanceEntryService = async (branchId, userId, entryId) => {
-  await requireBranchAdmin(branchId, userId);
+const deleteFinanceEntryService = async (
+  branchId,
+  userId,
+  entryId,
+  actionCode
+) => {
+  const { isAdmin, isModerator, branch } = await requireBranchAdmin(
+    branchId,
+    userId,
+    { requireBranchStaff: true }
+  );
 
   const { data: entry, error: findError } = await supabase
     .from("branch_finances")
@@ -1232,12 +1265,26 @@ const deleteFinanceEntryService = async (branchId, userId, entryId) => {
     );
   }
 
-  // Universal check: ONLY the user who created this entry can delete it
-  if (entry.recorded_by !== userId) {
-    throw new ApiError(
-      403,
-      "Only the user who created this entry can edit or delete it"
-    );
+  // Permission & Action Code Check:
+  // Branch Admin: Can delete directly (no code required).
+  // Moderator: Must provide the branch's finance_action_code.
+  if (!isAdmin) {
+    if (isModerator) {
+      const requiredCode = branch?.finance_action_code || "1234";
+      const providedCode =
+        typeof actionCode === "string" ? actionCode.trim() : "";
+      if (!providedCode || providedCode !== requiredCode) {
+        throw new ApiError(
+          403,
+          "ভুল সিকিউরিটি কোড! এন্ট্রি ডিলিট করতে ব্রাঞ্চ এডমিনের অনুমোদিত কোড প্রয়োজন।"
+        );
+      }
+    } else {
+      throw new ApiError(
+        403,
+        "শুধুমাত্র ব্রাঞ্চ এডমিন বা অনুমোদিত মডারেটর ডিলিট করতে পারবেন"
+      );
+    }
   }
 
   const { error: deleteError } = await supabase
@@ -1253,6 +1300,51 @@ const deleteFinanceEntryService = async (branchId, userId, entryId) => {
   return result;
 };
 
+// GET BRANCH ACTION CODE (Branch Admin only)
+const getBranchActionCodeService = async (branchId, userId) => {
+  const { isAdmin, branch } = await requireBranchAdmin(branchId, userId);
+
+  if (!isAdmin) {
+    throw new ApiError(
+      403,
+      "শুধুমাত্র ব্রাঞ্চ এডমিন এই সিকিউরিটি কোড দেখতে পারবেন"
+    );
+  }
+
+  const actionCode = branch?.finance_action_code || "1234";
+  const result = { actionCode };
+  return result;
+};
+
+// UPDATE BRANCH ACTION CODE (Branch Admin only)
+const updateBranchActionCodeService = async (branchId, userId, newCode) => {
+  const { isAdmin } = await requireBranchAdmin(branchId, userId);
+
+  if (!isAdmin) {
+    throw new ApiError(
+      403,
+      "শুধুমাত্র ব্রাঞ্চ এডমিন সিকিউরিটি কোড পরিবর্তন করতে পারবেন"
+    );
+  }
+
+  const trimmedCode = typeof newCode === "string" ? newCode.trim() : "";
+  if (!trimmedCode || trimmedCode.length < 4 || trimmedCode.length > 20) {
+    throw new ApiError(400, "কোড অবশ্যই ৪ থেকে ২০ অক্ষরের মধ্যে হতে হবে");
+  }
+
+  const { error: updateError } = await supabase
+    .from("branches")
+    .update({ finance_action_code: trimmedCode })
+    .eq("id", branchId);
+
+  if (updateError) {
+    throw new ApiError(500, "Failed to update branch action code");
+  }
+
+  const result = { actionCode: trimmedCode };
+  return result;
+};
+
 const branchFinanceServices = {
   getCategoriesListService,
   createCategoryService,
@@ -1265,6 +1357,8 @@ const branchFinanceServices = {
   deleteFinanceEntryService,
   recordFinancePaymentService,
   getFinancePaymentsService,
+  getBranchActionCodeService,
+  updateBranchActionCodeService,
 };
 
 export default branchFinanceServices;

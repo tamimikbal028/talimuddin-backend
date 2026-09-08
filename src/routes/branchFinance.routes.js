@@ -12,6 +12,11 @@ router.route("/categories").get(branchFinanceControllers.getFinanceCategories);
 router.route("/categories-list").get(branchFinanceControllers.getCategoriesList);
 router.route("/categories").post(branchFinanceControllers.createCategory);
 router.route("/export/month").get(branchFinanceControllers.getFinanceMonthExport);
+router
+  .route("/action-code")
+  .get(branchFinanceControllers.getBranchActionCode)
+  .patch(branchFinanceControllers.updateBranchActionCode);
+
 
 router
   .route("/")
