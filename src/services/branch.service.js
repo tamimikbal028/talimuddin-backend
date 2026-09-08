@@ -189,8 +189,8 @@ const removeMemberService = async (
     .delete()
     .eq("id", targetMembership.id);
 
-  // Decrement member count if target was a regular member
-  if (!targetMembership.is_admin) {
+  // Decrement member count if target was a regular member (not admin, not moderator)
+  if (!targetMembership.is_admin && !targetMembership.is_moderator) {
     await supabase
       .from("branches")
       .update({ members_count: Math.max(0, (branch.members_count || 1) - 1) })
@@ -500,13 +500,14 @@ const getBranchDetailsService = async (branchId, userId) => {
     can_manage_finance: canManageFinance,
   };
 
-  // Get accurate count of regular members (excluding admins)
+  // Get accurate count of regular members (excluding admins and moderators)
   const { count: regularMembersCount } = await supabase
     .from("branch_memberships")
     .select("id", { count: "exact", head: true })
     .eq("branch_id", branchId)
     .eq("is_deleted", false)
-    .eq("is_admin", false);
+    .eq("is_admin", false)
+    .eq("is_moderator", false);
 
   const mappedBranch = mapBranchDetailsRow(branchRow);
   if (regularMembersCount !== null && regularMembersCount !== undefined) {
@@ -790,6 +791,7 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
       email,
       note,
       is_admin,
+      is_moderator,
       created_at,
       user_id,
       user:users!user_id(id, full_name, user_name, avatar, email)
@@ -798,7 +800,8 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
     )
     .eq("branch_id", branchId)
     .eq("is_deleted", false)
-    .eq("is_admin", false);
+    .eq("is_admin", false)
+    .eq("is_moderator", false);
 
   if (queryParams?.search) {
     const s = queryParams.search.trim();
@@ -827,7 +830,7 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
       const u = membership.user;
       const isManual = !membership.user_id;
 
-      if (membership.is_admin) {
+      if (membership.is_admin || membership.is_moderator) {
         return null;
       }
 
@@ -912,7 +915,7 @@ const searchUsersService = async (query, requesterId, branchId = null) => {
 
   let builder = supabase
     .from("users")
-    .select("id, full_name, user_name, email, avatar")
+    .select("id, full_name, user_name, email, avatar, user_type")
     .eq("account_status", "ACTIVE");
 
   const trimmedQuery = query?.trim();
@@ -952,6 +955,7 @@ const searchUsersService = async (query, requesterId, branchId = null) => {
 
   const mappedUsers = userList.map((u) => ({
     ...u,
+    is_app_admin: u.user_type === "ADMIN",
     branch_role: branchRoleMap[u.id] || null,
   }));
 
@@ -985,12 +989,20 @@ const addBranchAdminService = async (branchId, requesterId, targetUserId) => {
   // 3. Verify target user exists and is active
   const { data: targetUser, error: userErr } = await supabase
     .from("users")
-    .select("id, full_name, user_name, email, avatar, account_status")
+    .select("id, full_name, user_name, email, avatar, account_status, user_type")
     .eq("id", targetUserId)
     .maybeSingle();
 
   if (userErr || !targetUser || targetUser.account_status !== "ACTIVE") {
     throw new ApiError(404, "Target user not found or inactive");
+  }
+
+  // App Admin cannot be added as branch admin
+  if (targetUser.user_type === "ADMIN") {
+    throw new ApiError(
+      400,
+      "App administrator cannot be added as a branch admin"
+    );
   }
 
   // 4. Check if membership already exists for this branch and user
@@ -1013,11 +1025,17 @@ const addBranchAdminService = async (branchId, requesterId, targetUserId) => {
       throw new ApiError(400, "This user is already an admin of this branch");
     }
 
+    const wasRegular =
+      !existingMembership.is_admin &&
+      !existingMembership.is_moderator &&
+      !existingMembership.is_deleted;
+
     // Update existing record to be an active admin
     const { error: updateError } = await supabase
       .from("branch_memberships")
       .update({
         is_admin: true,
+        is_moderator: false,
         is_deleted: false,
         name: targetUser.full_name,
         email: targetUser.email,
@@ -1030,6 +1048,13 @@ const addBranchAdminService = async (branchId, requesterId, targetUserId) => {
         500,
         updateError.message || "Failed to update member to admin"
       );
+    }
+
+    if (wasRegular) {
+      await supabase
+        .from("branches")
+        .update({ members_count: Math.max(0, (branch.members_count || 1) - 1) })
+        .eq("id", branchId);
     }
   } else {
     // Insert new membership record as admin
@@ -1101,12 +1126,20 @@ const addBranchModeratorService = async (
   // 3. Verify target user exists and is active
   const { data: targetUser, error: userErr } = await supabase
     .from("users")
-    .select("id, full_name, user_name, email, avatar, account_status")
+    .select("id, full_name, user_name, email, avatar, account_status, user_type")
     .eq("id", targetUserId)
     .maybeSingle();
 
   if (userErr || !targetUser || targetUser.account_status !== "ACTIVE") {
     throw new ApiError(404, "Target user not found or inactive");
+  }
+
+  // App Admin cannot be added as branch moderator
+  if (targetUser.user_type === "ADMIN") {
+    throw new ApiError(
+      400,
+      "App administrator cannot be added as a branch moderator"
+    );
   }
 
   // 4. Check if membership already exists for this branch and user
@@ -1135,6 +1168,11 @@ const addBranchModeratorService = async (
       );
     }
 
+    const wasRegular =
+      !existingMembership.is_admin &&
+      !existingMembership.is_moderator &&
+      !existingMembership.is_deleted;
+
     // Update existing record to be an active moderator
     const { error: updateError } = await supabase
       .from("branch_memberships")
@@ -1158,6 +1196,13 @@ const addBranchModeratorService = async (
         500,
         updateError.message || "Failed to update member to moderator"
       );
+    }
+
+    if (wasRegular) {
+      await supabase
+        .from("branches")
+        .update({ members_count: Math.max(0, (branch.members_count || 1) - 1) })
+        .eq("id", branchId);
     }
   } else {
     // Insert new membership record as moderator
