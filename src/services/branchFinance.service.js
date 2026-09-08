@@ -815,6 +815,29 @@ const getFinanceCategoriesService = async (branchId, userId, query) => {
     throw new ApiError(500, "Failed to fetch categories breakdown");
   }
 
+  const parseYearMonth = (dateStr) => {
+    if (typeof dateStr === "string" && dateStr.length >= 7) {
+      const parts = dateStr.split("-");
+      const y = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      if (!isNaN(y) && !isNaN(m) && m >= 1 && m <= 12) {
+        return {
+          year: y,
+          month: m,
+          monthKey: `${y}-${m.toString().padStart(2, "0")}`,
+        };
+      }
+    }
+    const d = new Date(dateStr);
+    const y = isNaN(d.getFullYear()) ? new Date().getFullYear() : d.getFullYear();
+    const m = isNaN(d.getMonth()) ? new Date().getMonth() + 1 : d.getMonth() + 1;
+    return {
+      year: y,
+      month: m,
+      monthKey: `${y}-${m.toString().padStart(2, "0")}`,
+    };
+  };
+
   const categoryMap = {};
   if (entries) {
     for (const raw of entries) {
@@ -836,6 +859,7 @@ const getFinanceCategoriesService = async (branchId, userId, query) => {
           due: 0,
           balance: 0,
           count: 0,
+          monthsMap: {},
         };
       }
 
@@ -854,13 +878,52 @@ const getFinanceCategoriesService = async (branchId, userId, query) => {
         categoryMap[catId].expense += totalAmt;
         categoryMap[catId].balance -= paidAmt;
       }
+
+      // Group by month
+      const { year, month, monthKey } = parseYearMonth(entry.date);
+      if (!categoryMap[catId].monthsMap[monthKey]) {
+        categoryMap[catId].monthsMap[monthKey] = {
+          year,
+          month,
+          monthKey,
+          income: 0,
+          expense: 0,
+          paid: 0,
+          due: 0,
+          balance: 0,
+          count: 0,
+        };
+      }
+
+      const m = categoryMap[catId].monthsMap[monthKey];
+      m.count += 1;
+      m.paid += paidAmt;
+      m.due += dueAmt;
+
+      if (entry.type === FINANCE_TYPES.INCOME) {
+        m.income += totalAmt;
+        m.balance += paidAmt;
+      } else {
+        m.expense += totalAmt;
+        m.balance -= paidAmt;
+      }
     }
   }
 
-  // Convert to array, sort by absolute balance descending
-  const categories = Object.values(categoryMap).sort(
-    (a, b) => Math.abs(b.balance) - Math.abs(a.balance)
-  );
+  // Convert to array, sort months descending, sort categories by absolute balance descending
+  const categories = Object.values(categoryMap)
+    .map((cat) => {
+      const months = Object.values(cat.monthsMap).sort((a, b) => {
+        if (b.year !== a.year) return b.year - a.year;
+        return b.month - a.month;
+      });
+      delete cat.monthsMap;
+      return {
+        ...cat,
+        months,
+      };
+    })
+    .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
 
   const result = { categories };
   return result;
