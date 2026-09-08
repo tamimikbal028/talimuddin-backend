@@ -84,6 +84,7 @@ create table if not exists public.branch_memberships (
   email text,
   note text,
   is_admin boolean not null default false,
+  is_moderator boolean not null default false,
   is_deleted boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -133,6 +134,19 @@ create table if not exists public.branch_finance_payments (
   created_at timestamptz not null default now()
 );
 
+-- [Table: Notices (সেন্ট্রাল নোটিশ বোর্ড)]
+create table if not exists public.notices (
+  id uuid primary key default gen_random_uuid(),
+  title text not null check (char_length(trim(title)) > 0),
+  content text not null check (char_length(trim(content)) > 0),
+  is_pinned boolean not null default false,
+  is_active boolean not null default true,
+  is_deleted boolean not null default false,
+  created_by uuid not null references public.users(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 -- ৫. ইনডেক্স সেটাপ
 create index if not exists users_user_name_trgm_idx on public.users using gin (user_name gin_trgm_ops);
 create index if not exists branch_finance_categories_branch_id_idx on public.branch_finance_categories (branch_id);
@@ -141,12 +155,19 @@ create index if not exists branch_finances_date_idx on public.branch_finances (d
 create index if not exists idx_branch_finance_payments_finance_id on public.branch_finance_payments(finance_id);
 create index if not exists idx_branch_finance_payments_branch_id on public.branch_finance_payments(branch_id);
 create index if not exists idx_branch_finance_payments_date on public.branch_finance_payments(payment_date);
+create index if not exists idx_branch_memberships_moderator on public.branch_memberships(branch_id, is_moderator) where is_moderator = true;
+create index if not exists idx_notices_status_created on public.notices(is_active, is_deleted, created_at desc);
+create index if not exists idx_notices_pinned on public.notices(is_pinned) where is_pinned = true and is_active = true and is_deleted = false;
+create index if not exists idx_notices_created_by on public.notices(created_by);
 
 -- ৬. ট্রিগার ফাংশনসমূহ
 
 -- Updated At ট্রিগার্স
 drop trigger if exists set_users_updated_at on public.users;
 create trigger set_users_updated_at before update on public.users for each row execute function public.set_updated_at();
+
+drop trigger if exists set_notices_updated_at on public.notices;
+create trigger set_notices_updated_at before update on public.notices for each row execute function public.set_updated_at();
 
 -- Auth ট্রিগার (অটো প্রোফাইল ক্রিয়েশন এবং ইউজারনেম জেনারেটর)
 create or replace function public.handle_new_user()
@@ -185,6 +206,7 @@ alter table public.branches enable row level security;
 alter table public.branch_memberships enable row level security;
 alter table public.branch_finance_categories enable row level security;
 alter table public.branch_finances enable row level security;
+alter table public.notices enable row level security;
 
 grant usage on schema public to authenticated;
 grant usage on schema public to service_role;

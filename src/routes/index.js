@@ -1,5 +1,6 @@
 import authRouter from "./auth.routes.js";
 import branchRouter from "./branch.routes.js";
+import noticeRouter from "./notice.routes.js";
 import fileUploadRouter from "./common/fileUpload.routes.js";
 
 import { FEATURE_FLAGS } from "../constants/featureFlags.js";
@@ -15,6 +16,7 @@ const registerRoutes = (app) => {
 
   // 3. Other Modular Features (Controlled by their respective flags)
   FEATURE_FLAGS.BRANCH && app.use("/api/v1/branches", branchRouter);
+  FEATURE_FLAGS.NOTICE && app.use("/api/v1/notices", noticeRouter);
 };
 
 export default registerRoutes;

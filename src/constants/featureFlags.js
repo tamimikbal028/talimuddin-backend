@@ -3,4 +3,6 @@ export const FEATURE_FLAGS = {
   PROFILE: true,
   BRANCH: true,
   SETTINGS: true,
+  NOTICE: true,
 };
+
