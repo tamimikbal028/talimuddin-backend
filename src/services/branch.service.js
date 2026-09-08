@@ -236,10 +236,7 @@ const deleteBranchService = async (branchId, userId, userType) => {
   }
 
   if (!isAppAdmin) {
-    throw new ApiError(
-      403,
-      "Only app administrator can delete branch"
-    );
+    throw new ApiError(403, "Only app administrator can delete branch");
   }
 
   // 1. Soft Delete Branch
@@ -469,6 +466,7 @@ const getBranchDetailsService = async (branchId, userId) => {
   let membership = null;
   let user = null;
   let isAdmin = false;
+  let isModerator = false;
 
   if (userId) {
     const { data: membershipData } = await supabase
@@ -487,13 +485,19 @@ const getBranchDetailsService = async (branchId, userId) => {
     user = userData;
 
     isAdmin = membership?.is_admin || false;
+    isModerator = membership?.is_moderator || false;
   }
+
+  const isAppAdmin = user?.user_type === "ADMIN";
+  const canManageFinance = isAdmin || isAppAdmin || isModerator;
 
   const meta = {
     is_member: !!membership,
-    is_admin_user: user?.user_type === "ADMIN",
+    is_admin_user: isAppAdmin,
     is_creator: false,
     is_admin: isAdmin,
+    is_moderator: isModerator,
+    can_manage_finance: canManageFinance,
   };
 
   // Get accurate count of regular members (excluding admins)
@@ -854,6 +858,7 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
           user_relation_status: isSelf ? "SELF" : "NONE",
           member_id: membership.id,
           is_admin: false,
+          is_moderator: Boolean(membership.is_moderator),
           is_creator: false,
           is_self: isSelf,
           is_manual: isManual,
@@ -876,20 +881,33 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
   };
 };
 
-// SEARCH USERS (App Admin only, for selecting branch admins)
-const searchUsersService = async (query, requesterId) => {
-  // 1. Verify requester is App Admin
+// SEARCH USERS (App Admin or Branch Admin, for selecting branch roles)
+const searchUsersService = async (query, requesterId, branchId = null) => {
+  // 1. Verify requester is App Admin or Branch Admin
   const { data: requester, error: reqErr } = await supabase
     .from("users")
     .select("user_type")
     .eq("id", requesterId)
     .maybeSingle();
 
-  if (reqErr || !requester || requester.user_type !== "ADMIN") {
-    throw new ApiError(
-      403,
-      "Only app administrators can search users to assign roles"
-    );
+  const isAppAdmin = requester?.user_type === "ADMIN";
+
+  if (!isAppAdmin) {
+    const { data: adminMembership } = await supabase
+      .from("branch_memberships")
+      .select("id")
+      .eq("user_id", requesterId)
+      .eq("is_admin", true)
+      .eq("is_deleted", false)
+      .limit(1)
+      .maybeSingle();
+
+    if (!adminMembership) {
+      throw new ApiError(
+        403,
+        "Only branch admins or app administrators can search users to assign roles"
+      );
+    }
   }
 
   let builder = supabase
@@ -912,7 +930,32 @@ const searchUsersService = async (query, requesterId) => {
     throw new ApiError(500, error.message || "Failed to search users");
   }
 
-  return { users: users || [] };
+  const userList = users || [];
+  const userIds = userList.map((u) => u.id);
+
+  let branchRoleMap = {};
+  if (branchId && userIds.length > 0) {
+    const { data: memberships } = await supabase
+      .from("branch_memberships")
+      .select("user_id, is_admin, is_moderator, is_deleted")
+      .eq("branch_id", branchId)
+      .in("user_id", userIds)
+      .eq("is_deleted", false);
+
+    (memberships || []).forEach((m) => {
+      branchRoleMap[m.user_id] = {
+        is_admin: m.is_admin === true,
+        is_moderator: m.is_moderator === true,
+      };
+    });
+  }
+
+  const mappedUsers = userList.map((u) => ({
+    ...u,
+    branch_role: branchRoleMap[u.id] || null,
+  }));
+
+  return { users: mappedUsers };
 };
 
 // ADD BRANCH ADMIN (App Admin only)
@@ -1020,6 +1063,143 @@ const addBranchAdminService = async (branchId, requesterId, targetUserId) => {
   };
 };
 
+// ADD BRANCH MODERATOR (Branch Admin only)
+const addBranchModeratorService = async (
+  branchId,
+  requesterId,
+  targetUserId
+) => {
+  // 1. Verify requester is Branch Admin of this branch (Only Branch Admin, not App Admin)
+  const { data: requesterMembership } = await supabase
+    .from("branch_memberships")
+    .select("is_admin")
+    .eq("branch_id", branchId)
+    .eq("user_id", requesterId)
+    .eq("is_deleted", false)
+    .maybeSingle();
+
+  const isBranchAdmin = requesterMembership?.is_admin === true;
+
+  if (!isBranchAdmin) {
+    throw new ApiError(
+      403,
+      "Only branch administrators can add moderators to this branch"
+    );
+  }
+
+  // 2. Verify branch exists and is not deleted
+  const { data: branch, error: branchErr } = await supabase
+    .from("branches")
+    .select("id, name, is_deleted")
+    .eq("id", branchId)
+    .maybeSingle();
+
+  if (branchErr || !branch || branch.is_deleted) {
+    throw new ApiError(404, "Branch not found or has been deleted");
+  }
+
+  // 3. Verify target user exists and is active
+  const { data: targetUser, error: userErr } = await supabase
+    .from("users")
+    .select("id, full_name, user_name, email, avatar, account_status")
+    .eq("id", targetUserId)
+    .maybeSingle();
+
+  if (userErr || !targetUser || targetUser.account_status !== "ACTIVE") {
+    throw new ApiError(404, "Target user not found or inactive");
+  }
+
+  // 4. Check if membership already exists for this branch and user
+  const { data: existingMembership, error: memErr } = await supabase
+    .from("branch_memberships")
+    .select("id, is_admin, is_moderator, is_deleted")
+    .eq("branch_id", branchId)
+    .eq("user_id", targetUserId)
+    .maybeSingle();
+
+  if (memErr && memErr.code !== "42703") {
+    throw new ApiError(
+      500,
+      memErr.message || "Failed to verify membership status"
+    );
+  }
+
+  if (existingMembership) {
+    if (existingMembership.is_admin && !existingMembership.is_deleted) {
+      throw new ApiError(400, "This user is already an admin of this branch");
+    }
+    if (existingMembership.is_moderator && !existingMembership.is_deleted) {
+      throw new ApiError(
+        400,
+        "This user is already a moderator of this branch"
+      );
+    }
+
+    // Update existing record to be an active moderator
+    const { error: updateError } = await supabase
+      .from("branch_memberships")
+      .update({
+        is_moderator: true,
+        is_deleted: false,
+        name: targetUser.full_name,
+        email: targetUser.email,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existingMembership.id);
+
+    if (updateError) {
+      if (updateError.code === "42703") {
+        throw new ApiError(
+          400,
+          "Moderator support requires database migration. Please run migration_add_branch_moderator.sql in Supabase SQL editor."
+        );
+      }
+      throw new ApiError(
+        500,
+        updateError.message || "Failed to update member to moderator"
+      );
+    }
+  } else {
+    // Insert new membership record as moderator
+    const { error: insertError } = await supabase
+      .from("branch_memberships")
+      .insert({
+        branch_id: branchId,
+        user_id: targetUserId,
+        name: targetUser.full_name,
+        email: targetUser.email,
+        is_admin: false,
+        is_moderator: true,
+        is_deleted: false,
+      });
+
+    if (insertError) {
+      if (insertError.code === "42703") {
+        throw new ApiError(
+          400,
+          "Moderator support requires database migration. Please run migration_add_branch_moderator.sql in Supabase SQL editor."
+        );
+      }
+      throw new ApiError(
+        500,
+        insertError.message || "Failed to add user as branch moderator"
+      );
+    }
+  }
+
+  const result = {
+    user: {
+      id: targetUser.id,
+      full_name: targetUser.full_name,
+      user_name: targetUser.user_name,
+      email: targetUser.email,
+      avatar: targetUser.avatar,
+    },
+  };
+
+  return result;
+};
+
 const branchServices = {
   // Branch Actions
   createBranchService,
@@ -1030,6 +1210,7 @@ const branchServices = {
   addMemberService,
   updateMemberService,
   addBranchAdminService,
+  addBranchModeratorService,
 
   // Branch Info & Lists
   getMyBranchesService,

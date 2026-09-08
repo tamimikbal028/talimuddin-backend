@@ -2,8 +2,8 @@ import { supabase } from "../config/supabase.js";
 import { ApiError } from "../utils/ApiError.js";
 import { FINANCE_TYPES, PAYMENT_STATUS } from "../constants/finance.js";
 
-// Helper to verify branch admin permissions or app administrator
-const requireBranchAdmin = async (branchId, userId) => {
+// Helper to verify branch admin or moderator permissions or app administrator
+const requireBranchAdmin = async (branchId, userId, options = {}) => {
   // 1. Fetch Branch
   const { data: branch, error: branchError } = await supabase
     .from("branches")
@@ -27,23 +27,34 @@ const requireBranchAdmin = async (branchId, userId) => {
   // 3. Fetch Membership role
   const { data: membership } = await supabase
     .from("branch_memberships")
-    .select("is_admin")
+    .select("is_admin, is_moderator")
     .eq("branch_id", branchId)
     .eq("user_id", userId)
     .maybeSingle();
 
   const isAdmin = membership?.is_admin === true;
+  const isModerator = membership?.is_moderator === true;
 
-  if (!isAdmin && !isAppAdmin) {
-    throw new ApiError(
-      403,
-      "Only branch admins or app administrators can access branch finance"
-    );
+  if (options.requireStrictAdmin) {
+    if (!isAdmin && !isAppAdmin) {
+      throw new ApiError(
+        403,
+        "Only branch admins or app administrators can perform this action"
+      );
+    }
+  } else {
+    if (!isAdmin && !isAppAdmin && !isModerator) {
+      throw new ApiError(
+        403,
+        "Only branch admins, moderators or app administrators can access branch finance"
+      );
+    }
   }
 
-  const result = { isAdmin, isAppAdmin };
+  const result = { isAdmin, isAppAdmin, isModerator };
   return result;
 };
+
 
 // Helper to normalize entry object with due and payment fields
 const mapEntryWithDue = (entry) => {
@@ -935,7 +946,7 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
   // Check if entry exists for this branch
   const { data: existing, error: findError } = await supabase
     .from("branch_finances")
-    .select("id, amount, total_amount, paid_amount, due_amount, payment_status")
+    .select("id, recorded_by, amount, total_amount, paid_amount, due_amount, payment_status")
     .eq("id", entryId)
     .eq("branch_id", branchId)
     .maybeSingle();
@@ -946,6 +957,15 @@ const updateFinanceEntryService = async (branchId, userId, entryId, data) => {
       "Finance entry not found or doesn't belong to this branch"
     );
   }
+
+  // Universal check: ONLY the user who created this entry can edit it
+  if (existing.recorded_by !== userId) {
+    throw new ApiError(
+      403,
+      "Only the user who created this entry can edit or delete it"
+    );
+  }
+
 
   const {
     type,
@@ -1102,7 +1122,7 @@ const deleteFinanceEntryService = async (branchId, userId, entryId) => {
 
   const { data: entry, error: findError } = await supabase
     .from("branch_finances")
-    .select("id")
+    .select("id, recorded_by")
     .eq("id", entryId)
     .eq("branch_id", branchId)
     .maybeSingle();
@@ -1113,6 +1133,15 @@ const deleteFinanceEntryService = async (branchId, userId, entryId) => {
       "Finance entry not found or doesn't belong to this branch"
     );
   }
+
+  // Universal check: ONLY the user who created this entry can delete it
+  if (entry.recorded_by !== userId) {
+    throw new ApiError(
+      403,
+      "Only the user who created this entry can edit or delete it"
+    );
+  }
+
 
   const { error: deleteError } = await supabase
     .from("branch_finances")

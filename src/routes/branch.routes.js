@@ -9,7 +9,9 @@ import {
   addMemberSchema,
   updateMemberSchema,
   addBranchAdminSchema,
+  addBranchModeratorSchema,
 } from "../validators/branch.validator.js";
+
 import branchControllers from "../controllers/branch.controller.js";
 import branchFinanceRouter from "./branchFinance.routes.js";
 
@@ -62,6 +64,15 @@ router.post(
   validate(addBranchAdminSchema),
   branchControllers.addBranchAdmin
 );
+
+// Branch Moderator Appointment (Branch Admin / App Admin)
+router.post(
+  "/:branchId/moderators",
+  verifyJWT,
+  validate(addBranchModeratorSchema),
+  branchControllers.addBranchModerator
+);
+
 
 // Branch Members (Strictly guarded - only members/admins)
 router.get("/:branchId/members", verifyJWT, branchControllers.getBranchMembers);
