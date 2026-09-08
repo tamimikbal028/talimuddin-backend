@@ -829,8 +829,12 @@ const getFinanceCategoriesService = async (branchId, userId, query) => {
       }
     }
     const d = new Date(dateStr);
-    const y = isNaN(d.getFullYear()) ? new Date().getFullYear() : d.getFullYear();
-    const m = isNaN(d.getMonth()) ? new Date().getMonth() + 1 : d.getMonth() + 1;
+    const y = isNaN(d.getFullYear())
+      ? new Date().getFullYear()
+      : d.getFullYear();
+    const m = isNaN(d.getMonth())
+      ? new Date().getMonth() + 1
+      : d.getMonth() + 1;
     return {
       year: y,
       month: m,
