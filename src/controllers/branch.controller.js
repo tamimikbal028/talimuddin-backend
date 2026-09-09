@@ -245,16 +245,20 @@ const searchUsers = AsyncHandler(async (req, res) => {
   const query =
     typeof req.query.query === "string" ? req.query.query : req.query.q || "";
   const branchId = req.query.branchId || req.query.branch_id || null;
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 15;
 
-  const { users } = await branchServices.searchUsersService(
-    query,
+  const { users, pagination } = await branchServices.searchUsersService(
+    { query, page, limit },
     req.user.id,
     branchId
   );
 
   return res
     .status(200)
-    .json(new ApiResponse(200, { users }, "Users searched successfully"));
+    .json(
+      new ApiResponse(200, { users, pagination }, "Users searched successfully")
+    );
 });
 
 // ==========================================

@@ -885,7 +885,15 @@ const getBranchMembersService = async (branchId, userId, queryParams) => {
 };
 
 // SEARCH USERS (App Admin or Branch Admin, for selecting branch roles)
-const searchUsersService = async (query, requesterId, branchId = null) => {
+const searchUsersService = async (queryParams, requesterId, branchId = null) => {
+  const query =
+    typeof queryParams === "string"
+      ? queryParams
+      : queryParams?.query || queryParams?.q || "";
+  const { page, limit, from, to } = getPaginationParams(
+    typeof queryParams === "object" ? queryParams : { page: 1, limit: 15 }
+  );
+
   // 1. Verify requester is App Admin or Branch Admin
   const { data: requester, error: reqErr } = await supabase
     .from("users")
@@ -915,7 +923,9 @@ const searchUsersService = async (query, requesterId, branchId = null) => {
 
   let builder = supabase
     .from("users")
-    .select("id, full_name, user_name, email, avatar, user_type")
+    .select("id, full_name, user_name, email, avatar, user_type", {
+      count: "exact",
+    })
     .eq("account_status", "ACTIVE");
 
   const trimmedQuery = query?.trim();
@@ -925,9 +935,9 @@ const searchUsersService = async (query, requesterId, branchId = null) => {
     );
   }
 
-  const { data: users, error } = await builder
+  const { data: users, count, error } = await builder
     .order("full_name", { ascending: true })
-    .limit(20);
+    .range(from, to);
 
   if (error) {
     throw new ApiError(500, error.message || "Failed to search users");
@@ -959,7 +969,9 @@ const searchUsersService = async (query, requesterId, branchId = null) => {
     branch_role: branchRoleMap[u.id] || null,
   }));
 
-  return { users: mappedUsers };
+  const pagination = buildPagination(page, limit, count || 0);
+
+  return { users: mappedUsers, pagination };
 };
 
 // ADD BRANCH ADMIN (App Admin only)
