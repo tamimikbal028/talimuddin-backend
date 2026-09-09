@@ -10,6 +10,7 @@ import {
   updateMemberSchema,
   addBranchAdminSchema,
   addBranchModeratorSchema,
+  updateBranchModeratorSchema,
 } from "../validators/branch.validator.js";
 
 import branchControllers from "../controllers/branch.controller.js";
@@ -82,6 +83,12 @@ router.post(
   verifyJWT,
   validate(addBranchModeratorSchema),
   branchControllers.addBranchModerator
+);
+router.patch(
+  "/:branchId/moderators/:memberId",
+  verifyJWT,
+  validate(updateBranchModeratorSchema),
+  branchControllers.updateBranchModerator
 );
 router.delete(
   "/:branchId/moderators/:memberId",

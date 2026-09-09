@@ -86,6 +86,7 @@ create table if not exists public.branch_memberships (
   note text,
   is_admin boolean not null default false,
   is_moderator boolean not null default false,
+  allowed_category_ids jsonb default null,
   is_deleted boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()

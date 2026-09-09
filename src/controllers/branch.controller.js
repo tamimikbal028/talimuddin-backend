@@ -280,12 +280,13 @@ const addBranchAdmin = AsyncHandler(async (req, res) => {
 // ==========================================
 const addBranchModerator = AsyncHandler(async (req, res) => {
   const { branchId } = req.params;
-  const { user_id } = req.body;
+  const { user_id, allowed_category_ids } = req.body;
 
   const result = await branchServices.addBranchModeratorService(
     branchId,
     req.user.id,
-    user_id
+    user_id,
+    allowed_category_ids
   );
 
   return res
@@ -376,6 +377,31 @@ const removeBranchModerator = AsyncHandler(async (req, res) => {
     );
 });
 
+// ==========================================
+// 23. UPDATE BRANCH MODERATOR
+// ==========================================
+const updateBranchModerator = AsyncHandler(async (req, res) => {
+  const { branchId, memberId } = req.params;
+  const { allowed_category_ids } = req.body;
+
+  const result = await branchServices.updateBranchModeratorService(
+    branchId,
+    req.user.id,
+    memberId,
+    allowed_category_ids
+  );
+
+  return res
+    .status(200)
+    .json(
+      new ApiResponse(
+        200,
+        result,
+        "Branch moderator permissions updated successfully"
+      )
+    );
+});
+
 const branchControllers = {
   createBranch,
   getAllBranches,
@@ -393,6 +419,7 @@ const branchControllers = {
   searchUsers,
   addBranchAdmin,
   addBranchModerator,
+  updateBranchModerator,
   getBranchAdmins,
   getBranchModerators,
   removeBranchAdmin,

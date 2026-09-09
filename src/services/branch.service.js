@@ -1092,7 +1092,8 @@ const addBranchAdminService = async (branchId, requesterId, targetUserId) => {
 const addBranchModeratorService = async (
   branchId,
   requesterId,
-  targetUserId
+  targetUserId,
+  allowedCategoryIds = null
 ) => {
   // 1. Verify requester is Branch Admin of this branch (Only Branch Admin, not App Admin)
   const { data: requesterMembership } = await supabase
@@ -1115,7 +1116,7 @@ const addBranchModeratorService = async (
   // 2. Verify branch exists and is not deleted
   const { data: branch, error: branchErr } = await supabase
     .from("branches")
-    .select("id, name, is_deleted")
+    .select("id, name, is_deleted, members_count")
     .eq("id", branchId)
     .maybeSingle();
 
@@ -1142,7 +1143,29 @@ const addBranchModeratorService = async (
     );
   }
 
-  // 4. Check if membership already exists for this branch and user
+  // 4. Validate category IDs if provided
+  let normalizedCategoryIds = null;
+  if (Array.isArray(allowedCategoryIds) && allowedCategoryIds.length > 0) {
+    const { data: validCategories, error: catErr } = await supabase
+      .from("branch_finance_categories")
+      .select("id")
+      .eq("branch_id", branchId)
+      .in("id", allowedCategoryIds);
+
+    if (
+      catErr ||
+      !validCategories ||
+      validCategories.length !== allowedCategoryIds.length
+    ) {
+      throw new ApiError(
+        400,
+        "One or more selected categories are invalid or do not belong to this branch"
+      );
+    }
+    normalizedCategoryIds = allowedCategoryIds;
+  }
+
+  // 5. Check if membership already exists for this branch and user
   const { data: existingMembership, error: memErr } = await supabase
     .from("branch_memberships")
     .select("id, is_admin, is_moderator, is_deleted")
@@ -1174,24 +1197,33 @@ const addBranchModeratorService = async (
       !existingMembership.is_deleted;
 
     // Update existing record to be an active moderator
-    const { error: updateError } = await supabase
+    let { error: updateError } = await supabase
       .from("branch_memberships")
       .update({
         is_moderator: true,
         is_deleted: false,
         name: targetUser.full_name,
         email: targetUser.email,
+        allowed_category_ids: normalizedCategoryIds,
         updated_at: new Date().toISOString(),
       })
       .eq("id", existingMembership.id);
 
+    if (updateError && updateError.code === "42703") {
+      const fallbackRes = await supabase
+        .from("branch_memberships")
+        .update({
+          is_moderator: true,
+          is_deleted: false,
+          name: targetUser.full_name,
+          email: targetUser.email,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existingMembership.id);
+      updateError = fallbackRes.error;
+    }
+
     if (updateError) {
-      if (updateError.code === "42703") {
-        throw new ApiError(
-          400,
-          "Moderator support requires database migration. Please run migration_add_branch_moderator.sql in Supabase SQL editor."
-        );
-      }
       throw new ApiError(
         500,
         updateError.message || "Failed to update member to moderator"
@@ -1206,7 +1238,7 @@ const addBranchModeratorService = async (
     }
   } else {
     // Insert new membership record as moderator
-    const { error: insertError } = await supabase
+    let { error: insertError } = await supabase
       .from("branch_memberships")
       .insert({
         branch_id: branchId,
@@ -1215,16 +1247,26 @@ const addBranchModeratorService = async (
         email: targetUser.email,
         is_admin: false,
         is_moderator: true,
+        allowed_category_ids: normalizedCategoryIds,
         is_deleted: false,
       });
 
+    if (insertError && insertError.code === "42703") {
+      const fallbackRes = await supabase
+        .from("branch_memberships")
+        .insert({
+          branch_id: branchId,
+          user_id: targetUserId,
+          name: targetUser.full_name,
+          email: targetUser.email,
+          is_admin: false,
+          is_moderator: true,
+          is_deleted: false,
+        });
+      insertError = fallbackRes.error;
+    }
+
     if (insertError) {
-      if (insertError.code === "42703") {
-        throw new ApiError(
-          400,
-          "Moderator support requires database migration. Please run migration_add_branch_moderator.sql in Supabase SQL editor."
-        );
-      }
       throw new ApiError(
         500,
         insertError.message || "Failed to add user as branch moderator"
@@ -1240,9 +1282,102 @@ const addBranchModeratorService = async (
       email: targetUser.email,
       avatar: targetUser.avatar,
     },
+    allowed_category_ids: normalizedCategoryIds,
   };
 
   return result;
+};
+
+// UPDATE BRANCH MODERATOR (Branch Admin only)
+const updateBranchModeratorService = async (
+  branchId,
+  requesterId,
+  memberId,
+  allowedCategoryIds = null
+) => {
+  // 1. Verify requester is Branch Admin of this branch
+  const { data: requesterMembership } = await supabase
+    .from("branch_memberships")
+    .select("is_admin")
+    .eq("branch_id", branchId)
+    .eq("user_id", requesterId)
+    .eq("is_deleted", false)
+    .maybeSingle();
+
+  const isBranchAdmin = requesterMembership?.is_admin === true;
+
+  if (!isBranchAdmin) {
+    throw new ApiError(
+      403,
+      "Only branch administrators can update moderator permissions"
+    );
+  }
+
+  // 2. Verify target membership exists and is a moderator
+  const { data: targetMembership, error: targetErr } = await supabase
+    .from("branch_memberships")
+    .select("id, user_id, is_moderator, is_deleted")
+    .eq("id", memberId)
+    .eq("branch_id", branchId)
+    .maybeSingle();
+
+  if (
+    targetErr ||
+    !targetMembership ||
+    !targetMembership.is_moderator ||
+    targetMembership.is_deleted
+  ) {
+    throw new ApiError(404, "Branch moderator not found or has been deleted");
+  }
+
+  // 3. Validate category IDs if provided
+  let normalizedCategoryIds = null;
+  if (Array.isArray(allowedCategoryIds) && allowedCategoryIds.length > 0) {
+    const { data: validCategories, error: catErr } = await supabase
+      .from("branch_finance_categories")
+      .select("id")
+      .eq("branch_id", branchId)
+      .in("id", allowedCategoryIds);
+
+    if (
+      catErr ||
+      !validCategories ||
+      validCategories.length !== allowedCategoryIds.length
+    ) {
+      throw new ApiError(
+        400,
+        "One or more selected categories are invalid or do not belong to this branch"
+      );
+    }
+    normalizedCategoryIds = allowedCategoryIds;
+  }
+
+  // 4. Update allowed_category_ids
+  const { error: updateError } = await supabase
+    .from("branch_memberships")
+    .update({
+      allowed_category_ids: normalizedCategoryIds,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", memberId);
+
+  if (updateError) {
+    if (updateError.code === "42703") {
+      throw new ApiError(
+        400,
+        "Moderator category restriction requires database migration. Please run migration_add_moderator_category_restriction.sql in Supabase SQL editor."
+      );
+    }
+    throw new ApiError(
+      500,
+      updateError.message || "Failed to update moderator permissions"
+    );
+  }
+
+  return {
+    member_id: memberId,
+    allowed_category_ids: normalizedCategoryIds,
+  };
 };
 
 // GET BRANCH ADMINS
@@ -1292,13 +1427,15 @@ const getBranchModeratorsService = async (branchId) => {
     throw new ApiError(404, "Branch not found or has been deleted");
   }
 
-  const { data: moderators, error } = await supabase
+  let moderators = [];
+  const { data: mods, error } = await supabase
     .from("branch_memberships")
     .select(
       `
       id,
       user_id,
       is_moderator,
+      allowed_category_ids,
       created_at,
       user:users!user_id(id, full_name, user_name, email, avatar)
     `
@@ -1310,12 +1447,56 @@ const getBranchModeratorsService = async (branchId) => {
 
   if (error) {
     if (error.code === "42703") {
-      return { moderators: [] };
+      const { data: fallbackMods } = await supabase
+        .from("branch_memberships")
+        .select(
+          `
+          id,
+          user_id,
+          is_moderator,
+          created_at,
+          user:users!user_id(id, full_name, user_name, email, avatar)
+        `
+        )
+        .eq("branch_id", branchId)
+        .eq("is_moderator", true)
+        .eq("is_deleted", false)
+        .order("created_at", { ascending: true });
+      moderators = fallbackMods || [];
+    } else {
+      throw new ApiError(
+        500,
+        error.message || "Failed to fetch branch moderators"
+      );
     }
-    throw new ApiError(500, error.message || "Failed to fetch branch moderators");
+  } else {
+    moderators = mods || [];
   }
 
-  return { moderators: moderators || [] };
+  // Fetch branch categories to populate allowed_categories with names and types
+  const { data: branchCategories } = await supabase
+    .from("branch_finance_categories")
+    .select("id, name, type")
+    .eq("branch_id", branchId);
+
+  const catMap = new Map((branchCategories || []).map((c) => [c.id, c]));
+
+  const enrichedModerators = moderators.map((mod) => {
+    const catIds = Array.isArray(mod.allowed_category_ids)
+      ? mod.allowed_category_ids
+      : null;
+    const allowedCategories = catIds
+      ? catIds.map((id) => catMap.get(id)).filter(Boolean)
+      : null;
+
+    return {
+      ...mod,
+      allowed_category_ids: catIds,
+      allowed_categories: allowedCategories,
+    };
+  });
+
+  return { moderators: enrichedModerators };
 };
 
 // REMOVE BRANCH ADMIN (App Admin ONLY)
@@ -1424,6 +1605,7 @@ const branchServices = {
   updateMemberService,
   addBranchAdminService,
   addBranchModeratorService,
+  updateBranchModeratorService,
   getBranchAdminsService,
   getBranchModeratorsService,
   removeBranchAdminService,

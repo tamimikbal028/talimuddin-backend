@@ -24,16 +24,33 @@ const requireBranchAdmin = async (branchId, userId, options = {}) => {
 
   const isAppAdmin = user?.user_type === "ADMIN";
 
-  // 3. Fetch Membership role
-  const { data: membership } = await supabase
+  // 3. Fetch Membership role & allowed_category_ids
+  let membership = null;
+  const { data: memData, error: memErr } = await supabase
     .from("branch_memberships")
-    .select("is_admin, is_moderator")
+    .select("is_admin, is_moderator, allowed_category_ids")
     .eq("branch_id", branchId)
     .eq("user_id", userId)
     .maybeSingle();
 
+  if (memErr && memErr.code === "42703") {
+    // Fallback if column not yet added
+    const { data: fallbackMem } = await supabase
+      .from("branch_memberships")
+      .select("is_admin, is_moderator")
+      .eq("branch_id", branchId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    membership = fallbackMem;
+  } else {
+    membership = memData;
+  }
+
   const isAdmin = membership?.is_admin === true;
   const isModerator = membership?.is_moderator === true;
+  const allowedCategoryIds = Array.isArray(membership?.allowed_category_ids)
+    ? membership.allowed_category_ids
+    : null;
 
   if (options.requireBranchStaff) {
     if (!isAdmin && !isModerator) {
@@ -58,7 +75,13 @@ const requireBranchAdmin = async (branchId, userId, options = {}) => {
     }
   }
 
-  const result = { isAdmin, isAppAdmin, isModerator, branch };
+  const result = {
+    isAdmin,
+    isAppAdmin,
+    isModerator,
+    allowedCategoryIds,
+    branch,
+  };
   return result;
 };
 
@@ -100,13 +123,23 @@ const mapEntryWithDue = (entry) => {
 
 // GET CATEGORIES LIST FOR SELECT BOX
 const getCategoriesListService = async (branchId, userId) => {
-  await requireBranchAdmin(branchId, userId);
+  const { isAdmin, isAppAdmin, isModerator, allowedCategoryIds } =
+    await requireBranchAdmin(branchId, userId);
 
-  const { data: categories, error } = await supabase
+  let query = supabase
     .from("branch_finance_categories")
     .select("id, name, type")
     .eq("branch_id", branchId)
     .order("name", { ascending: true });
+
+  // If requester is a moderator with restricted categories, filter the list
+  if (!isAdmin && !isAppAdmin && isModerator) {
+    if (allowedCategoryIds && allowedCategoryIds.length > 0) {
+      query = query.in("id", allowedCategoryIds);
+    }
+  }
+
+  const { data: categories, error } = await query;
 
   if (error) {
     throw new ApiError(500, "Failed to fetch categories list");
@@ -118,7 +151,18 @@ const getCategoriesListService = async (branchId, userId) => {
 
 // CREATE A NEW CATEGORY FOR THE BRANCH
 const createCategoryService = async (branchId, userId, { name, type }) => {
-  await requireBranchAdmin(branchId, userId, { requireBranchStaff: true });
+  const { isAdmin, isAppAdmin, isModerator, allowedCategoryIds } =
+    await requireBranchAdmin(branchId, userId, { requireBranchStaff: true });
+
+  // If a moderator is restricted to specific categories, they cannot create new categories
+  if (!isAdmin && !isAppAdmin && isModerator) {
+    if (allowedCategoryIds && allowedCategoryIds.length > 0) {
+      throw new ApiError(
+        403,
+        "নির্দিষ্ট ক্যাটাগরিতে সীমাবদ্ধ মডারেটর নতুন ক্যাটাগরি তৈরি করতে পারবেন না।"
+      );
+    }
+  }
 
   if (!name || !type) {
     throw new ApiError(400, "Category name and type are required");
@@ -176,7 +220,8 @@ const createCategoryService = async (branchId, userId, { name, type }) => {
 
 // CREATE FINANCE ENTRY (WITH OPTIONAL DUE & PAYMENT STATUS)
 const createFinanceEntryService = async (branchId, userId, data) => {
-  await requireBranchAdmin(branchId, userId, { requireBranchStaff: true });
+  const { isAdmin, isAppAdmin, isModerator, allowedCategoryIds } =
+    await requireBranchAdmin(branchId, userId, { requireBranchStaff: true });
 
   const {
     type,
@@ -250,6 +295,18 @@ const createFinanceEntryService = async (branchId, userId, data) => {
 
   if (category.type !== type) {
     throw new ApiError(400, "Category type mismatch");
+  }
+
+  // Verify permission for restricted moderators
+  if (!isAdmin && !isAppAdmin && isModerator) {
+    if (allowedCategoryIds && allowedCategoryIds.length > 0) {
+      if (!allowedCategoryIds.includes(category_id)) {
+        throw new ApiError(
+          403,
+          "আপনার এই ক্যাটাগরিতে এন্ট্রি যোগ করার অনুমতি নেই।"
+        );
+      }
+    }
   }
 
   // Validate breakdown details if provided
@@ -1042,17 +1099,14 @@ const updateFinanceEntryService = async (
   data,
   actionCode
 ) => {
-  const { isAdmin, isModerator, branch } = await requireBranchAdmin(
-    branchId,
-    userId,
-    { requireBranchStaff: true }
-  );
+  const { isAdmin, isAppAdmin, isModerator, allowedCategoryIds, branch } =
+    await requireBranchAdmin(branchId, userId, { requireBranchStaff: true });
 
   // Check if entry exists for this branch
   const { data: existing, error: findError } = await supabase
     .from("branch_finances")
     .select(
-      "id, recorded_by, amount, total_amount, paid_amount, due_amount, payment_status"
+      "id, category_id, recorded_by, amount, total_amount, paid_amount, due_amount, payment_status"
     )
     .eq("id", entryId)
     .eq("branch_id", branchId)
@@ -1151,6 +1205,21 @@ const updateFinanceEntryService = async (
     throw new ApiError(400, "Category type mismatch");
   }
 
+  // Verify permission for restricted moderators
+  if (!isAdmin && !isAppAdmin && isModerator) {
+    if (allowedCategoryIds && allowedCategoryIds.length > 0) {
+      if (
+        !allowedCategoryIds.includes(category_id) ||
+        !allowedCategoryIds.includes(existing.category_id)
+      ) {
+        throw new ApiError(
+          403,
+          "আপনার এই ক্যাটাগরির এন্ট্রি পরিবর্তন করার অনুমতি নেই।"
+        );
+      }
+    }
+  }
+
   // Validate breakdown details if provided
   if (details && Array.isArray(details) && details.length > 0) {
     const detailsSum = details.reduce(
@@ -1245,15 +1314,12 @@ const deleteFinanceEntryService = async (
   entryId,
   actionCode
 ) => {
-  const { isAdmin, isModerator, branch } = await requireBranchAdmin(
-    branchId,
-    userId,
-    { requireBranchStaff: true }
-  );
+  const { isAdmin, isAppAdmin, isModerator, allowedCategoryIds, branch } =
+    await requireBranchAdmin(branchId, userId, { requireBranchStaff: true });
 
   const { data: entry, error: findError } = await supabase
     .from("branch_finances")
-    .select("id, recorded_by")
+    .select("id, recorded_by, category_id")
     .eq("id", entryId)
     .eq("branch_id", branchId)
     .maybeSingle();
@@ -1263,6 +1329,18 @@ const deleteFinanceEntryService = async (
       404,
       "Finance entry not found or doesn't belong to this branch"
     );
+  }
+
+  // Verify permission for restricted moderators
+  if (!isAdmin && !isAppAdmin && isModerator) {
+    if (allowedCategoryIds && allowedCategoryIds.length > 0) {
+      if (!allowedCategoryIds.includes(entry.category_id)) {
+        throw new ApiError(
+          403,
+          "আপনার এই ক্যাটাগরির এন্ট্রি ডিলিট করার অনুমতি নেই।"
+        );
+      }
+    }
   }
 
   // Permission & Action Code Check:

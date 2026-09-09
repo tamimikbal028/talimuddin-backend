@@ -209,6 +209,24 @@ const addBranchModeratorSchema = Joi.object({
       "string.empty": "User ID is required",
       "any.required": "User ID is required",
     }),
+  allowed_category_ids: Joi.array()
+    .items(Joi.string().guid({ version: ["uuidv4"] }))
+    .allow(null)
+    .optional()
+    .messages({
+      "array.base": "Allowed category IDs must be an array of UUIDs",
+    }),
+});
+
+// Update branch moderator schema
+const updateBranchModeratorSchema = Joi.object({
+  allowed_category_ids: Joi.array()
+    .items(Joi.string().guid({ version: ["uuidv4"] }))
+    .allow(null)
+    .optional()
+    .messages({
+      "array.base": "Allowed category IDs must be an array of UUIDs",
+    }),
 });
 
 export {
@@ -220,5 +238,7 @@ export {
   updateMemberSchema,
   addBranchAdminSchema,
   addBranchModeratorSchema,
+  updateBranchModeratorSchema,
 };
+
 
