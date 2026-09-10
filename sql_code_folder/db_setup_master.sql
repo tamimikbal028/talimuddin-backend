@@ -119,6 +119,7 @@ create table if not exists public.branch_finances (
   recorded_by uuid not null references public.users(id) on delete restrict,
   person_name text default '',
   person_phone text default '',
+  member_id uuid references public.branch_memberships(id) on delete set null,
   details jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -154,6 +155,7 @@ create index if not exists users_user_name_trgm_idx on public.users using gin (u
 create index if not exists branch_finance_categories_branch_id_idx on public.branch_finance_categories (branch_id);
 create index if not exists branch_finances_branch_id_idx on public.branch_finances (branch_id);
 create index if not exists branch_finances_date_idx on public.branch_finances (date);
+create index if not exists idx_branch_finances_member_id on public.branch_finances (member_id);
 create index if not exists idx_branch_finance_payments_finance_id on public.branch_finance_payments(finance_id);
 create index if not exists idx_branch_finance_payments_branch_id on public.branch_finance_payments(branch_id);
 create index if not exists idx_branch_finance_payments_date on public.branch_finance_payments(payment_date);

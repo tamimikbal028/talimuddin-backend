@@ -234,6 +234,8 @@ const createFinanceEntryService = async (branchId, userId, data) => {
     date,
     personName,
     personPhone,
+    member_id,
+    memberId,
     details,
   } = data;
 
@@ -323,6 +325,8 @@ const createFinanceEntryService = async (branchId, userId, data) => {
     }
   }
 
+  const finalMemberId = member_id || memberId || null;
+
   const basePayload = {
     branch_id: branchId,
     type,
@@ -337,61 +341,90 @@ const createFinanceEntryService = async (branchId, userId, data) => {
     recorded_by: userId,
     person_name: personName?.trim() || "",
     person_phone: personPhone?.trim() || "",
+    member_id: finalMemberId,
     details: details?.length > 0 ? details : [],
   };
 
   const selectColsWithDue = `
-    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, details, created_at,
     recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-    category:branch_finance_categories!category_id(id, name, type)
+    category:branch_finance_categories!category_id(id, name, type),
+    member:branch_memberships!member_id(id, name, phone, serial_no)
   `;
 
   let entry = null;
-  const { data: inserted, error: insertError } = await supabase
+  let { data: inserted, error: insertError } = await supabase
     .from("branch_finances")
     .insert(basePayload)
     .select(selectColsWithDue)
     .single();
 
-  if (insertError && insertError.code === "42703") {
-    // If due columns not yet added to DB, insert with fallback
-    const fallbackPayload = {
-      branch_id: branchId,
-      type,
-      amount: totalAmount,
-      category_id,
-      note: note?.trim() || "",
-      date: date ? new Date(date).toISOString() : new Date().toISOString(),
-      recorded_by: userId,
-      person_name: personName?.trim() || "",
-      person_phone: personPhone?.trim() || "",
-      details: details?.length > 0 ? details : [],
-    };
-    const { data: fallbackInserted, error: fallbackError } = await supabase
+  if (
+    insertError &&
+    (insertError.code === "42703" || insertError.code === "PGRST200")
+  ) {
+    // If member join or member_id column fails, retry without member join
+    const selectWithoutMember = `
+      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+      recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+      category:branch_finance_categories!category_id(id, name, type)
+    `;
+
+    const payloadWithoutMember = { ...basePayload };
+    delete payloadWithoutMember.member_id;
+
+    const retryRes = await supabase
       .from("branch_finances")
-      .insert(fallbackPayload)
-      .select(
-        `
-        id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
-        recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-        category:branch_finance_categories!category_id(id, name, type)
-      `
-      )
+      .insert(payloadWithoutMember)
+      .select(selectWithoutMember)
       .single();
 
-    if (fallbackError || !fallbackInserted) {
+    if (!retryRes.error && retryRes.data) {
+      inserted = retryRes.data;
+      insertError = null;
+    } else if (retryRes.error && retryRes.error.code === "42703") {
+      // If due columns not yet added to DB, insert with fallback
+      const fallbackPayload = {
+        branch_id: branchId,
+        type,
+        amount: totalAmount,
+        category_id,
+        note: note?.trim() || "",
+        date: date ? new Date(date).toISOString() : new Date().toISOString(),
+        recorded_by: userId,
+        person_name: personName?.trim() || "",
+        person_phone: personPhone?.trim() || "",
+        details: details?.length > 0 ? details : [],
+      };
+      const { data: fallbackInserted, error: fallbackError } = await supabase
+        .from("branch_finances")
+        .insert(fallbackPayload)
+        .select(
+          `
+          id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
+          recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+          category:branch_finance_categories!category_id(id, name, type)
+        `
+        )
+        .single();
+
+      if (fallbackError || !fallbackInserted) {
+        throw new ApiError(
+          500,
+          fallbackError?.message || "Failed to create finance entry"
+        );
+      }
+      entry = mapEntryWithDue(fallbackInserted);
+    }
+  }
+
+  if (!entry) {
+    if (insertError || !inserted) {
       throw new ApiError(
         500,
-        fallbackError?.message || "Failed to create finance entry"
+        insertError?.message || "Failed to create finance entry"
       );
     }
-    entry = mapEntryWithDue(fallbackInserted);
-  } else if (insertError || !inserted) {
-    throw new ApiError(
-      500,
-      insertError?.message || "Failed to create finance entry"
-    );
-  } else {
     entry = mapEntryWithDue(inserted);
   }
 
@@ -514,21 +547,39 @@ const recordFinancePaymentService = async (branchId, userId, entryId, data) => {
     .eq("id", entryId)
     .select(
       `
-      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, details, created_at,
       recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-      category:branch_finance_categories!category_id(id, name, type)
+      category:branch_finance_categories!category_id(id, name, type),
+      member:branch_memberships!member_id(id, name, phone, serial_no)
     `
     )
     .single();
 
-  if (updateError || !updatedRaw) {
+  let finalRaw = updatedRaw;
+  if (updateError && (updateError.code === "42703" || updateError.code === "PGRST200")) {
+    const { data: retryRaw, error: retryError } = await supabase
+      .from("branch_finances")
+      .select(
+        `
+        id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+        recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+        category:branch_finance_categories!category_id(id, name, type)
+      `
+      )
+      .eq("id", entryId)
+      .single();
+
+    if (!retryError && retryRaw) {
+      finalRaw = retryRaw;
+    }
+  } else if (updateError || !updatedRaw) {
     throw new ApiError(
       500,
       updateError?.message || "Failed to update entry due balance"
     );
   }
 
-  const updatedEntry = mapEntryWithDue(updatedRaw);
+  const updatedEntry = mapEntryWithDue(finalRaw);
   const result = { entry: updatedEntry, payment: paymentRecord };
   return result;
 };
@@ -569,6 +620,7 @@ const getFinanceEntriesService = async (branchId, userId, query) => {
     type,
     category_id,
     payment_status,
+    member_id,
     page = 1,
     limit = 20,
     startDate,
@@ -576,9 +628,10 @@ const getFinanceEntriesService = async (branchId, userId, query) => {
   } = query;
 
   const selectColsWithDue = `
-    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, details, created_at,
     recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-    category:branch_finance_categories!category_id(id, name, type)
+    category:branch_finance_categories!category_id(id, name, type),
+    member:branch_memberships!member_id(id, name, phone, serial_no)
   `;
 
   const selectColsFallback = `
@@ -606,6 +659,10 @@ const getFinanceEntriesService = async (branchId, userId, query) => {
 
     if (category_id) {
       qb = qb.eq("category_id", category_id);
+    }
+
+    if (member_id && !useFallback) {
+      qb = qb.eq("member_id", member_id);
     }
 
     if (payment_status && !useFallback) {
@@ -640,7 +697,7 @@ const getFinanceEntriesService = async (branchId, userId, query) => {
 
   let { data: entries, error, count } = await buildQuery(selectColsWithDue);
 
-  if (error && error.code === "42703") {
+  if (error && (error.code === "42703" || error.code === "PGRST200")) {
     useFallback = true;
     const fallbackRes = await buildQuery(selectColsFallback);
     entries = fallbackRes.data;
@@ -1017,9 +1074,10 @@ const getFinanceMonthExportService = async (branchId, userId, query) => {
   }
 
   const selectCols = `
-    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, details, created_at,
     recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-    category:branch_finance_categories!category_id(id, name, type)
+    category:branch_finance_categories!category_id(id, name, type),
+    member:branch_memberships!member_id(id, name, phone, serial_no)
   `;
 
   let { data: entries, error } = await supabase
@@ -1029,7 +1087,7 @@ const getFinanceMonthExportService = async (branchId, userId, query) => {
     .order("date", { ascending: true })
     .order("created_at", { ascending: true });
 
-  if (error && error.code === "42703") {
+  if (error && (error.code === "42703" || error.code === "PGRST200")) {
     const fallbackRes = await supabase
       .from("branch_finances")
       .select(
@@ -1171,6 +1229,8 @@ const updateFinanceEntryService = async (
     date,
     personName,
     personPhone,
+    member_id,
+    memberId,
     details,
   } = data;
 
@@ -1268,57 +1328,89 @@ const updateFinanceEntryService = async (
     details: details?.length > 0 ? details : [],
   };
 
+  if (member_id !== undefined || memberId !== undefined) {
+    updatePayload.member_id = member_id || memberId || null;
+  }
+
   const selectCols = `
-    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, details, created_at,
     recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-    category:branch_finance_categories!category_id(id, name, type)
+    category:branch_finance_categories!category_id(id, name, type),
+    member:branch_memberships!member_id(id, name, phone, serial_no)
   `;
 
   let updatedEntry = null;
-  const { data: updatedRaw, error: updateError } = await supabase
+  let { data: updatedRaw, error: updateError } = await supabase
     .from("branch_finances")
     .update(updatePayload)
     .eq("id", entryId)
     .select(selectCols)
     .single();
 
-  if (updateError && updateError.code === "42703") {
-    const fallbackPayload = {
-      type,
-      amount: totalAmount,
-      category_id,
-      note: note?.trim() || "",
-      date: date ? new Date(date).toISOString() : new Date().toISOString(),
-      person_name: personName?.trim() || "",
-      person_phone: personPhone?.trim() || "",
-      details: details?.length > 0 ? details : [],
-    };
-    const { data: fallbackUpdated, error: fallbackError } = await supabase
+  if (
+    updateError &&
+    (updateError.code === "42703" || updateError.code === "PGRST200")
+  ) {
+    const selectWithoutMember = `
+      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+      recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+      category:branch_finance_categories!category_id(id, name, type)
+    `;
+
+    const retryPayload = { ...updatePayload };
+    delete retryPayload.member_id;
+
+    const retryRes = await supabase
       .from("branch_finances")
-      .update(fallbackPayload)
+      .update(retryPayload)
       .eq("id", entryId)
-      .select(
-        `
-        id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
-        recorded_by:users!recorded_by(id, full_name, user_name, avatar),
-        category:branch_finance_categories!category_id(id, name, type)
-      `
-      )
+      .select(selectWithoutMember)
       .single();
 
-    if (fallbackError || !fallbackUpdated) {
+    if (!retryRes.error && retryRes.data) {
+      updatedRaw = retryRes.data;
+      updateError = null;
+    } else if (retryRes.error && retryRes.error.code === "42703") {
+      const fallbackPayload = {
+        type,
+        amount: totalAmount,
+        category_id,
+        note: note?.trim() || "",
+        date: date ? new Date(date).toISOString() : new Date().toISOString(),
+        person_name: personName?.trim() || "",
+        person_phone: personPhone?.trim() || "",
+        details: details?.length > 0 ? details : [],
+      };
+      const { data: fallbackUpdated, error: fallbackError } = await supabase
+        .from("branch_finances")
+        .update(fallbackPayload)
+        .eq("id", entryId)
+        .select(
+          `
+          id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
+          recorded_by:users!recorded_by(id, full_name, user_name, avatar),
+          category:branch_finance_categories!category_id(id, name, type)
+        `
+        )
+        .single();
+
+      if (fallbackError || !fallbackUpdated) {
+        throw new ApiError(
+          500,
+          fallbackError?.message || "Failed to update finance entry"
+        );
+      }
+      updatedEntry = mapEntryWithDue(fallbackUpdated);
+    }
+  }
+
+  if (!updatedEntry) {
+    if (updateError || !updatedRaw) {
       throw new ApiError(
         500,
-        fallbackError?.message || "Failed to update finance entry"
+        updateError?.message || "Failed to update finance entry"
       );
     }
-    updatedEntry = mapEntryWithDue(fallbackUpdated);
-  } else if (updateError || !updatedRaw) {
-    throw new ApiError(
-      500,
-      updateError?.message || "Failed to update finance entry"
-    );
-  } else {
     updatedEntry = mapEntryWithDue(updatedRaw);
   }
 
