@@ -121,19 +121,31 @@ const registerUserService = async (userData) => {
     throw new ApiError(409, "User with this email already exists");
   }
 
+  // Use supabaseAuth.auth.signUp to trigger Supabase confirmation email flow
   const { data: authData, error: signUpError } =
-    await supabase.auth.admin.createUser({
+    await supabaseAuth.auth.signUp({
       email: normalizedEmail,
       password,
-      email_confirm: true,
-      user_metadata: {
-        full_name: full_name,
-        user_type: user_type,
-        agree_to_terms: agree_to_terms,
+      options: {
+        data: {
+          full_name: full_name,
+          user_type: user_type,
+          agree_to_terms: agree_to_terms,
+        },
+        ...(userData.redirectUrl ? { emailRedirectTo: userData.redirectUrl } : {}),
       },
     });
 
   if (signUpError || !authData?.user) {
+    if (
+      signUpError?.code === "over_email_send_rate_limit" ||
+      signUpError?.message?.toLowerCase().includes("rate limit")
+    ) {
+      throw new ApiError(
+        429,
+        "ইমেইল পাঠানোর লিমিট শেষ হয়ে গেছে (Supabase email rate limit exceeded)। কিছুক্ষণ পর চেষ্টা করুন অথবা কাস্টম SMTP ব্যবহার করুন।"
+      );
+    }
     if (signUpError?.message?.toLowerCase().includes("already")) {
       throw new ApiError(409, "User with this email already exists");
     }
@@ -143,29 +155,46 @@ const registerUserService = async (userData) => {
     );
   }
 
-  const userId = authData.user.id;
+  // Supabase with identity protection returns empty identities when email already exists
+  if (Array.isArray(authData.user.identities) && authData.user.identities.length === 0) {
+    throw new ApiError(409, "User with this email already exists");
+  }
 
+  const userId = authData.user.id;
+  const isEmailConfirmed = Boolean(
+    authData.user.email_confirmed_at || authData.session
+  );
+
+  // When email confirmation is required by Supabase
+  if (!isEmailConfirmed) {
+    return {
+      emailConfirmationRequired: true,
+      message:
+        "নিবন্ধন সফল হয়েছে! অনুগ্রহ করে আপনার ইমেইল ইনবক্স চেক করে একাউন্ট কনফার্মেশন লিংকে ক্লিক করুন।",
+      user: {
+        id: userId,
+        email: normalizedEmail,
+        full_name,
+      },
+    };
+  }
+
+  // If already confirmed (or email confirmation is disabled in Supabase)
   // public.users row + unique user_name: SQL handle_new_user trigger on auth.users
   const profile = await fetchProfileById(userId);
   const { user: userWithMeta, meta } = await GetAuthUserWithMeta(profile);
   const { accessToken, refreshToken } =
     await generateAccessAndRefreshTokens(userId);
 
-  // Sign in to get supabase session
-  const { data: signInData, error: signInError } =
-    await supabaseAuth.auth.signInWithPassword({
-      email: normalizedEmail,
-      password,
-    });
-
-  const supabaseSession = signInData?.session
+  const supabaseSession = authData.session
     ? {
-        access_token: signInData.session.access_token,
-        refresh_token: signInData.session.refresh_token,
+        access_token: authData.session.access_token,
+        refresh_token: authData.session.refresh_token,
       }
     : null;
 
   return {
+    emailConfirmationRequired: false,
     user: userWithMeta,
     meta,
     accessToken,
@@ -186,6 +215,15 @@ const loginUserService = async ({ email, password }) => {
     });
 
   if (signInError || !signInData?.user) {
+    if (
+      signInError?.code === "email_not_confirmed" ||
+      signInError?.message?.toLowerCase().includes("email not confirmed")
+    ) {
+      throw new ApiError(
+        403,
+        "আপনার ইমেইল ভেরিফাই করা হয়নি। অনুগ্রহ করে ইনবক্স অথবা স্প্যাম ফোল্ডার চেক করে কনফার্মেশন লিংকে ক্লিক করুন।"
+      );
+    }
     throw new ApiError(401, "Email or password is incorrect.");
   }
 
@@ -211,6 +249,43 @@ const loginUserService = async ({ email, password }) => {
     accessToken,
     refreshToken,
     supabaseSession,
+  };
+};
+
+const resendConfirmationEmailService = async ({ email, redirectUrl }) => {
+  if (!email) {
+    throw new ApiError(400, "Email is required");
+  }
+
+  const normalizedEmail = email.toLowerCase().trim();
+  const existingProfile = await fetchProfileByEmail(normalizedEmail);
+  if (!existingProfile) {
+    throw new ApiError(404, "এই ইমেইল দিয়ে কোনো অ্যাকাউন্ট পাওয়া যায়নি।");
+  }
+
+  const { error } = await supabaseAuth.auth.resend({
+    type: "signup",
+    email: normalizedEmail,
+    options: {
+      ...(redirectUrl ? { emailRedirectTo: redirectUrl } : {}),
+    },
+  });
+
+  if (error) {
+    if (
+      error.code === "over_email_send_rate_limit" ||
+      error.message?.toLowerCase().includes("rate limit")
+    ) {
+      throw new ApiError(
+        429,
+        "ইমেইল পাঠানোর লিমিট শেষ হয়ে গেছে। কিছুক্ষণ পর আবার চেষ্টা করুন।"
+      );
+    }
+    throw new ApiError(400, error.message || "Failed to resend confirmation email");
+  }
+
+  return {
+    message: "কনফার্মেশন ইমেইল পুনরায় পাঠানো হয়েছে! অনুগ্রহ করে আপনার ইনবক্স চেক করুন।",
   };
 };
 
@@ -291,6 +366,7 @@ const changePasswordService = async (userId, oldPassword, newPassword) => {
 const authServices = {
   registerUserService,
   loginUserService,
+  resendConfirmationEmailService,
   logoutUserService,
   refreshAccessTokenService,
   changePasswordService,

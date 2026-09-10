@@ -12,14 +12,41 @@ const cookieOptions = {
 // Auth & Session
 // -----------------------------
 const registerUser = AsyncHandler(async (req, res) => {
-  const { user, meta, accessToken, refreshToken, supabaseSession } =
-    await authServices.registerUserService(req.body);
+  const clientOrigin =
+    req.headers.origin || process.env.CLIENT_URL || "http://localhost:5173";
+  const result = await authServices.registerUserService({
+    ...req.body,
+    redirectUrl: `${clientOrigin}/login`,
+  });
+
+  if (result.emailConfirmationRequired) {
+    return res
+      .status(201)
+      .json(
+        new ApiResponse(
+          201,
+          {
+            emailConfirmationRequired: true,
+            user: result.user,
+          },
+          result.message
+        )
+      );
+  }
+
+  const { user, meta, accessToken, refreshToken, supabaseSession } = result;
 
   return res
     .status(201)
     .cookie("accessToken", accessToken, cookieOptions)
     .cookie("refreshToken", refreshToken, cookieOptions)
-    .json(new ApiResponse(200, { user, meta, supabaseSession }, "User registered Successfully"));
+    .json(
+      new ApiResponse(
+        200,
+        { user, meta, supabaseSession },
+        "User registered Successfully"
+      )
+    );
 });
 
 const loginUser = AsyncHandler(async (req, res) => {
@@ -78,6 +105,17 @@ const getCurrentUser = AsyncHandler(async (req, res) => {
     .json(new ApiResponse(200, { user, meta }, "User fetched successfully"));
 });
 
+const resendConfirmationEmail = AsyncHandler(async (req, res) => {
+  const clientOrigin =
+    req.headers.origin || process.env.CLIENT_URL || "http://localhost:5173";
+  const result = await authServices.resendConfirmationEmailService({
+    email: req.body.email,
+    redirectUrl: `${clientOrigin}/login`,
+  });
+
+  return res.status(200).json(new ApiResponse(200, {}, result.message));
+});
+
 const authControllers = {
   registerUser,
   loginUser,
@@ -85,6 +123,7 @@ const authControllers = {
   refreshAccessToken,
   changeCurrentPassword,
   getCurrentUser,
+  resendConfirmationEmail,
 };
 
 export default authControllers;
