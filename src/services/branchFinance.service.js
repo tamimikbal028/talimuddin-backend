@@ -614,13 +614,34 @@ const getFinancePaymentsService = async (branchId, userId, entryId) => {
 
 // GET FINANCE ENTRIES (Paginated, Filtered & with Due/Payment info)
 const getFinanceEntriesService = async (branchId, userId, query) => {
-  await requireBranchAdmin(branchId, userId);
+  const { member_id } = query;
+  let isAllowed = false;
+  try {
+    await requireBranchAdmin(branchId, userId);
+    isAllowed = true;
+  } catch (err) {
+    if (member_id) {
+      const { data: selfMem } = await supabase
+        .from("branch_memberships")
+        .select("id, user_id, branch_id")
+        .eq("id", member_id)
+        .eq("branch_id", branchId)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (selfMem) {
+        isAllowed = true;
+      }
+    }
+    if (!isAllowed) {
+      throw err;
+    }
+  }
 
   const {
     type,
     category_id,
     payment_status,
-    member_id,
     page = 1,
     limit = 20,
     startDate,
