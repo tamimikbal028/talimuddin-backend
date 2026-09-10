@@ -426,7 +426,7 @@ const recordFinancePaymentService = async (branchId, userId, entryId, data) => {
   const { data: rawEntry, error: findError } = await supabase
     .from("branch_finances")
     .select(
-      "id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status"
+      "id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, recorded_by"
     )
     .eq("id", entryId)
     .eq("branch_id", branchId)
@@ -443,6 +443,17 @@ const recordFinancePaymentService = async (branchId, userId, entryId, data) => {
     throw new ApiError(
       404,
       "Finance entry not found or doesn't belong to this branch"
+    );
+  }
+
+  const { isAppAdmin } = await requireBranchAdmin(branchId, userId, {
+    requireBranchStaff: true,
+  });
+
+  if (!isAppAdmin && rawEntry.recorded_by !== userId) {
+    throw new ApiError(
+      403,
+      "শুধুমাত্র যিনি এন্ট্রি করেছেন তিনিই বকেয়া আদায় বা পরিশোধ করতে পারবেন"
     );
   }
 
@@ -1119,6 +1130,14 @@ const updateFinanceEntryService = async (
     );
   }
 
+  // Only the creator can edit this entry
+  if (!isAppAdmin && existing.recorded_by !== userId) {
+    throw new ApiError(
+      403,
+      "শুধুমাত্র যিনি এন্ট্রি করেছেন তিনিই এটি এডিট করতে পারবেন"
+    );
+  }
+
   // Permission & Action Code Check:
   // Branch Admin: Can edit directly (no code required).
   // Moderator: Must provide the branch's finance_action_code.
@@ -1328,6 +1347,14 @@ const deleteFinanceEntryService = async (
     throw new ApiError(
       404,
       "Finance entry not found or doesn't belong to this branch"
+    );
+  }
+
+  // Only the creator can delete this entry
+  if (!isAppAdmin && entry.recorded_by !== userId) {
+    throw new ApiError(
+      403,
+      "শুধুমাত্র যিনি এন্ট্রি করেছেন তিনিই এটি ডিলিট করতে পারবেন"
     );
   }
 
