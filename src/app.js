@@ -18,7 +18,7 @@ app.use(
   cors({
     origin: [
       "https://talimuddin-frontend.vercel.app",
-      "https://talimuddin.pages.dev",
+      "https://talimuddin-ell.pages.dev",
       "http://localhost:5173",
     ],
     credentials: true,
