@@ -237,11 +237,16 @@ const createFinanceEntryService = async (branchId, userId, data) => {
     member_id,
     memberId,
     details,
+    salary_month,
   } = data;
 
   const rawAmount = total_amount !== undefined ? total_amount : amount;
   if (!type || rawAmount === undefined || !category_id) {
     throw new ApiError(400, "Type, amount, and category_id are required");
+  }
+
+  if (salary_month && !/^\d{4}-(0[1-9]|1[0-2])$/.test(salary_month)) {
+    throw new ApiError(400, "salary_month must be in YYYY-MM format");
   }
 
   if (type !== FINANCE_TYPES.INCOME && type !== FINANCE_TYPES.EXPENSE) {
@@ -342,11 +347,12 @@ const createFinanceEntryService = async (branchId, userId, data) => {
     person_name: personName?.trim() || "",
     person_phone: personPhone?.trim() || "",
     member_id: finalMemberId,
+    salary_month: salary_month || null,
     details: details?.length > 0 ? details : [],
   };
 
   const selectColsWithDue = `
-    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, details, created_at,
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, salary_month, details, created_at,
     recorded_by:users!recorded_by(id, full_name, user_name, avatar),
     category:branch_finance_categories!category_id(id, name, type),
     member:branch_memberships!member_id(id, name, phone, serial_no)
@@ -365,7 +371,7 @@ const createFinanceEntryService = async (branchId, userId, data) => {
   ) {
     // If member join or member_id column fails, retry without member join
     const selectWithoutMember = `
-      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, salary_month, details, created_at,
       recorded_by:users!recorded_by(id, full_name, user_name, avatar),
       category:branch_finance_categories!category_id(id, name, type)
     `;
@@ -394,6 +400,7 @@ const createFinanceEntryService = async (branchId, userId, data) => {
         recorded_by: userId,
         person_name: personName?.trim() || "",
         person_phone: personPhone?.trim() || "",
+        salary_month: salary_month || null,
         details: details?.length > 0 ? details : [],
       };
       const { data: fallbackInserted, error: fallbackError } = await supabase
@@ -401,7 +408,7 @@ const createFinanceEntryService = async (branchId, userId, data) => {
         .insert(fallbackPayload)
         .select(
           `
-          id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
+          id, branch_id, type, amount, note, date, person_name, person_phone, salary_month, details, created_at,
           recorded_by:users!recorded_by(id, full_name, user_name, avatar),
           category:branch_finance_categories!category_id(id, name, type)
         `
@@ -547,7 +554,7 @@ const recordFinancePaymentService = async (branchId, userId, entryId, data) => {
     .eq("id", entryId)
     .select(
       `
-      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, details, created_at,
+      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, salary_month, details, created_at,
       recorded_by:users!recorded_by(id, full_name, user_name, avatar),
       category:branch_finance_categories!category_id(id, name, type),
       member:branch_memberships!member_id(id, name, phone, serial_no)
@@ -649,14 +656,14 @@ const getFinanceEntriesService = async (branchId, userId, query) => {
   } = query;
 
   const selectColsWithDue = `
-    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, details, created_at,
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, salary_month, details, created_at,
     recorded_by:users!recorded_by(id, full_name, user_name, avatar),
     category:branch_finance_categories!category_id(id, name, type),
     member:branch_memberships!member_id(id, name, phone, serial_no)
   `;
 
   const selectColsFallback = `
-    id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
+    id, branch_id, type, amount, note, date, person_name, person_phone, salary_month, details, created_at,
     recorded_by:users!recorded_by(id, full_name, user_name, avatar),
     category:branch_finance_categories!category_id(id, name, type)
   `;
@@ -1095,7 +1102,7 @@ const getFinanceMonthExportService = async (branchId, userId, query) => {
   }
 
   const selectCols = `
-    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, details, created_at,
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, salary_month, details, created_at,
     recorded_by:users!recorded_by(id, full_name, user_name, avatar),
     category:branch_finance_categories!category_id(id, name, type),
     member:branch_memberships!member_id(id, name, phone, serial_no)
@@ -1253,11 +1260,16 @@ const updateFinanceEntryService = async (
     member_id,
     memberId,
     details,
+    salary_month,
   } = data;
 
   const rawAmount = total_amount !== undefined ? total_amount : amount;
   if (!type || rawAmount === undefined || !category_id) {
     throw new ApiError(400, "Type, amount, and category_id are required");
+  }
+
+  if (salary_month && !/^\d{4}-(0[1-9]|1[0-2])$/.test(salary_month)) {
+    throw new ApiError(400, "salary_month must be in YYYY-MM format");
   }
 
   if (type !== FINANCE_TYPES.INCOME && type !== FINANCE_TYPES.EXPENSE) {
@@ -1349,12 +1361,16 @@ const updateFinanceEntryService = async (
     details: details?.length > 0 ? details : [],
   };
 
+  if (salary_month !== undefined) {
+    updatePayload.salary_month = salary_month || null;
+  }
+
   if (member_id !== undefined || memberId !== undefined) {
     updatePayload.member_id = member_id || memberId || null;
   }
 
   const selectCols = `
-    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, details, created_at,
+    id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, member_id, salary_month, details, created_at,
     recorded_by:users!recorded_by(id, full_name, user_name, avatar),
     category:branch_finance_categories!category_id(id, name, type),
     member:branch_memberships!member_id(id, name, phone, serial_no)
@@ -1373,7 +1389,7 @@ const updateFinanceEntryService = async (
     (updateError.code === "42703" || updateError.code === "PGRST200")
   ) {
     const selectWithoutMember = `
-      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, details, created_at,
+      id, branch_id, type, amount, total_amount, paid_amount, due_amount, payment_status, note, date, person_name, person_phone, salary_month, details, created_at,
       recorded_by:users!recorded_by(id, full_name, user_name, avatar),
       category:branch_finance_categories!category_id(id, name, type)
     `;
@@ -1400,6 +1416,7 @@ const updateFinanceEntryService = async (
         date: date ? new Date(date).toISOString() : new Date().toISOString(),
         person_name: personName?.trim() || "",
         person_phone: personPhone?.trim() || "",
+        salary_month: salary_month || null,
         details: details?.length > 0 ? details : [],
       };
       const { data: fallbackUpdated, error: fallbackError } = await supabase
@@ -1408,7 +1425,7 @@ const updateFinanceEntryService = async (
         .eq("id", entryId)
         .select(
           `
-          id, branch_id, type, amount, note, date, person_name, person_phone, details, created_at,
+          id, branch_id, type, amount, note, date, person_name, person_phone, salary_month, details, created_at,
           recorded_by:users!recorded_by(id, full_name, user_name, avatar),
           category:branch_finance_categories!category_id(id, name, type)
         `

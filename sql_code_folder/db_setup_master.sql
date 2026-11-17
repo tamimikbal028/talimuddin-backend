@@ -120,10 +120,15 @@ create table if not exists public.branch_finances (
   person_name text default '',
   person_phone text default '',
   member_id uuid references public.branch_memberships(id) on delete set null,
+  salary_month text check (salary_month is null or salary_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
   details jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.branch_finances
+  add column if not exists salary_month text
+  check (salary_month is null or salary_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');
 
 -- [Table: Branch Finance Payments (বকেয়া আদায় ও কিস্তির খাতা)]
 create table if not exists public.branch_finance_payments (
