@@ -18,8 +18,8 @@ app.use(
   cors({
     origin: [
       "https://talimuddin-frontend.vercel.app",
+      "https://talimuddin.pages.dev",
       "http://localhost:5173",
-      `http://${IP_ADDRESS}:5173`,
     ],
     credentials: true,
   })
