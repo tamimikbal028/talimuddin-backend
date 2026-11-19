@@ -2,28 +2,11 @@ import { AsyncHandler } from "../utils/AsyncHandler.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import authServices from "../services/auth.service.js";
 import { GetAuthUserWithMeta } from "../utils/AuthUserWithMeta.js";
-import jwt from "jsonwebtoken";
 
 const cookieOptions = {
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-};
-
-const getTokenCookieOptions = (token) => {
-  const decodedToken = jwt.decode(token);
-  const expiresAt =
-    decodedToken && typeof decodedToken === "object"
-      ? decodedToken.exp
-      : undefined;
-  const maxAge =
-    typeof expiresAt === "number" ? expiresAt * 1000 - Date.now() : NaN;
-
-  if (!Number.isFinite(maxAge) || maxAge <= 0) {
-    throw new Error("Cannot determine a valid cookie expiration.");
-  }
-
-  return { ...cookieOptions, maxAge };
 };
 // -----------------------------
 // Auth & Session
@@ -55,8 +38,8 @@ const registerUser = AsyncHandler(async (req, res) => {
 
   return res
     .status(201)
-    .cookie("accessToken", accessToken, getTokenCookieOptions(accessToken))
-    .cookie("refreshToken", refreshToken, getTokenCookieOptions(refreshToken))
+    .cookie("accessToken", accessToken, cookieOptions)
+    .cookie("refreshToken", refreshToken, cookieOptions)
     .json(
       new ApiResponse(
         200,
@@ -72,8 +55,8 @@ const loginUser = AsyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .cookie("accessToken", accessToken, getTokenCookieOptions(accessToken))
-    .cookie("refreshToken", refreshToken, getTokenCookieOptions(refreshToken))
+    .cookie("accessToken", accessToken, cookieOptions)
+    .cookie("refreshToken", refreshToken, cookieOptions)
     .json(
       new ApiResponse(200, { user, meta, supabaseSession }, `Welcome back ${user.full_name}!`)
     );
@@ -97,8 +80,8 @@ const refreshAccessToken = AsyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .cookie("accessToken", accessToken, getTokenCookieOptions(accessToken))
-    .cookie("refreshToken", refreshToken, getTokenCookieOptions(refreshToken))
+    .cookie("accessToken", accessToken, cookieOptions)
+    .cookie("refreshToken", refreshToken, cookieOptions)
     .json(new ApiResponse(200, {}, "Access token refreshed"));
 });
 
