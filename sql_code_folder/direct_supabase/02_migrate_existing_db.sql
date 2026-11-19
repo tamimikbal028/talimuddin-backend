@@ -1,10 +1,15 @@
 -- ============================================================================
--- TALIMUDDIN / BIDDA: DIRECT SUPABASE MIGRATION SCRIPT
--- Run this script once in Supabase SQL Editor to enable full Backend-free
--- Frontend -> Supabase operation with RLS, Triggers, Storage Policies, and RPCs.
+-- TALIMUDDIN / BIDDA: MIGRATE EXISTING DATABASE TO DIRECT SUPABASE
+-- ============================================================================
+-- কখন ব্যবহার করবেন:
+-- আপনার বর্তমান Supabase প্রজেক্টে যদি আগে থেকেই ডেটা ও টেবিল থাকে (অর্থাৎ রিসেট
+-- না করে শুধু Direct Supabase সাপোর্ট যোগ করতে চান), তাহলে এই ফাইলটি রান করুন।
+--
+-- দ্রষ্টব্য: এতে কোনো DROP SCHEMA বা Storage SQL কোড নেই।
+-- Storage সেটআপের জন্য STORAGE_SETUP_GUIDE.md দেখুন।
 -- ============================================================================
 
--- 1. Ensure optional/recent columns and tables exist (safe idempotent checks)
+-- ১. নতুন/অপশনাল কলামগুলো নিশ্চিত করা (Safe Idempotent)
 alter table public.branch_memberships
   add column if not exists allowed_category_ids jsonb default null;
 
@@ -16,9 +21,41 @@ alter table public.branch_finances
   add column if not exists member_id uuid references public.branch_memberships(id) on delete set null,
   add column if not exists salary_month text check (salary_month is null or salary_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$');
 
--- ============================================================================
--- 2. Enable RLS on all application tables
--- ============================================================================
+-- ২. handle_new_user ট্রিগার আপডেট (নিরাপত্তা: সাইন-আপ মেটাডাটা থেকে কেউ যেন ADMIN হতে না পারে)
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  base_username text;
+  final_username text;
+begin
+  base_username := lower(split_part(new.email, '@', 1));
+  base_username := regexp_replace(base_username, '[^a-z0-9]', '', 'g');
+  if base_username = '' then
+    base_username := 'user';
+  end if;
+  final_username := base_username;
+
+  while exists (select 1 from public.users where user_name = final_username) loop
+    final_username := base_username || floor(random() * 10000)::text;
+  end loop;
+
+  insert into public.users (id, full_name, email, user_name, user_type)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'full_name', 'New User'),
+    new.email,
+    final_username,
+    'USER'
+  );
+  return new;
+end;
+$$;
+
+-- ৩. সকল টেবিলে RLS চালু করা
 alter table public.users enable row level security;
 alter table public.branches enable row level security;
 alter table public.branch_memberships enable row level security;
@@ -27,19 +64,16 @@ alter table public.branch_finances enable row level security;
 alter table public.branch_finance_payments enable row level security;
 alter table public.notices enable row level security;
 
--- ============================================================================
--- 3. Principle of Least Privilege: Table & Column Grants
--- ============================================================================
+-- ৪. Principle of Least Privilege: Table & Column Grants
 grant usage on schema public to anon, authenticated;
 
--- Users
 revoke all on public.users from anon;
 grant select on public.users to authenticated;
 revoke insert, update, delete on public.users from authenticated;
 grant insert (id, full_name, email, user_name, user_type) on public.users to authenticated;
 grant update (full_name, avatar, password_changed_at) on public.users to authenticated;
 
--- Branches: NEVER expose finance_action_code via direct SELECT
+-- Branches: finance_action_code সরাসরি SELECT করা যাবে না
 revoke all on public.branches from anon, authenticated;
 grant select (
   id, name, description, location_name, location_url, admin_info,
@@ -55,11 +89,9 @@ grant update (
   cover_image, branch_type, parent_branch_id, is_deleted, members_count
 ) on public.branches to authenticated;
 
--- Branch Memberships
 revoke all on public.branch_memberships from anon;
 grant select, insert, update, delete on public.branch_memberships to authenticated;
 
--- Finance Categories, Entries & Payments
 revoke all on public.branch_finance_categories from anon;
 grant select, insert, update, delete on public.branch_finance_categories to authenticated;
 
@@ -69,13 +101,10 @@ grant select, insert, update, delete on public.branch_finances to authenticated;
 revoke all on public.branch_finance_payments from anon;
 grant select, insert on public.branch_finance_payments to authenticated;
 
--- Notices
 revoke all on public.notices from anon;
 grant select, insert, update, delete on public.notices to authenticated;
 
--- ============================================================================
--- 4. Security Definer Helper Functions (Prevent RLS Recursion)
--- ============================================================================
+-- ৫. Security Definer Helper Functions
 create or replace function public.is_app_admin()
 returns boolean
 language sql
@@ -231,9 +260,7 @@ begin
 end;
 $$;
 
--- ============================================================================
--- 5. Automatic Member Count Sync Trigger
--- ============================================================================
+-- ৬. Automatic Member Count Sync Trigger + Backfill
 create or replace function public.sync_branch_members_count()
 returns trigger
 language plpgsql
@@ -265,7 +292,6 @@ create trigger trg_sync_branch_members_count
   after insert or update or delete on public.branch_memberships
   for each row execute function public.sync_branch_members_count();
 
--- Backfill accurate members_count once
 update public.branches b
 set members_count = (
   select count(*)::integer
@@ -276,11 +302,7 @@ set members_count = (
     and m.is_moderator = false
 );
 
--- ============================================================================
--- 6. RLS Policies
--- ============================================================================
-
--- [users]
+-- ৭. RLS Policies
 drop policy if exists "users_select_authenticated" on public.users;
 create policy "users_select_authenticated"
   on public.users for select
@@ -294,7 +316,6 @@ create policy "users_update_own"
   using (id = auth.uid())
   with check (id = auth.uid());
 
--- [branches]
 drop policy if exists "branches_select_active" on public.branches;
 create policy "branches_select_active"
   on public.branches for select
@@ -317,7 +338,6 @@ create policy "branches_update_admins"
     or (public.is_branch_admin(id) and is_deleted = false)
   );
 
--- [branch_memberships]
 drop policy if exists "memberships_select" on public.branch_memberships;
 create policy "memberships_select"
   on public.branch_memberships for select
@@ -364,7 +384,6 @@ create policy "memberships_delete"
     or (public.is_branch_admin(branch_id) and is_admin = false)
   );
 
--- [branch_finance_categories]
 drop policy if exists "finance_categories_select" on public.branch_finance_categories;
 create policy "finance_categories_select"
   on public.branch_finance_categories for select
@@ -377,7 +396,6 @@ create policy "finance_categories_insert"
   to authenticated
   with check (public.can_moderator_create_category(branch_id));
 
--- [branch_finances]
 drop policy if exists "branch_finances_select" on public.branch_finances;
 create policy "branch_finances_select"
   on public.branch_finances for select
@@ -402,12 +420,9 @@ create policy "branch_finances_insert"
     and public.can_moderator_use_category(branch_id, category_id)
   );
 
--- Direct UPDATE/DELETE on branch_finances is intentionally restricted;
--- use update_finance_entry_rpc / delete_finance_entry_rpc so action_code & ownership are enforced server-side.
 drop policy if exists "branch_finances_update" on public.branch_finances;
 drop policy if exists "branch_finances_delete" on public.branch_finances;
 
--- [branch_finance_payments]
 drop policy if exists "finance_payments_select" on public.branch_finance_payments;
 create policy "finance_payments_select"
   on public.branch_finance_payments for select
@@ -430,7 +445,6 @@ create policy "finance_payments_insert"
     )
   );
 
--- [notices]
 drop policy if exists "notices_select" on public.notices;
 create policy "notices_select"
   on public.notices for select
@@ -471,11 +485,7 @@ create policy "notices_delete_admin"
   to authenticated
   using (public.is_app_admin());
 
--- ============================================================================
--- 7. Security Definer RPC Functions
--- ============================================================================
-
--- 7.1 Soft Delete Branch (App Admin only)
+-- ৮. Security Definer RPC Functions
 create or replace function public.soft_delete_branch_rpc(p_branch_id uuid)
 returns jsonb
 language plpgsql
@@ -501,19 +511,13 @@ begin
     raise exception 'Branch already deleted';
   end if;
 
-  update public.branches
-  set is_deleted = true
-  where id = p_branch_id;
-
-  update public.branch_memberships
-  set is_deleted = true
-  where branch_id = p_branch_id;
+  update public.branches set is_deleted = true where id = p_branch_id;
+  update public.branch_memberships set is_deleted = true where branch_id = p_branch_id;
 
   return jsonb_build_object('branch_id', p_branch_id);
 end;
 $$;
 
--- 7.2 Add/Promote Branch Admin (App Admin only)
 create or replace function public.promote_or_add_branch_admin_rpc(
   p_branch_id uuid,
   p_target_user_id uuid
@@ -532,19 +536,13 @@ begin
     raise exception 'Only app administrators can add branch admins';
   end if;
 
-  select id, is_deleted into v_branch
-  from public.branches
-  where id = p_branch_id;
-
+  select id, is_deleted into v_branch from public.branches where id = p_branch_id;
   if not found or v_branch.is_deleted then
     raise exception 'Branch not found or has been deleted';
   end if;
 
   select id, full_name, user_name, email, avatar, account_status, user_type
-  into v_user
-  from public.users
-  where id = p_target_user_id;
-
+  into v_user from public.users where id = p_target_user_id;
   if not found or v_user.account_status <> 'ACTIVE' then
     raise exception 'Target user not found or inactive';
   end if;
@@ -556,8 +554,7 @@ begin
   select id, is_admin, is_moderator, is_deleted
   into v_existing
   from public.branch_memberships
-  where branch_id = p_branch_id
-    and user_id = p_target_user_id;
+  where branch_id = p_branch_id and user_id = p_target_user_id;
 
   if found then
     if v_existing.is_admin and not v_existing.is_deleted then
@@ -592,7 +589,6 @@ begin
 end;
 $$;
 
--- 7.3 Assign Branch Moderator (Branch Admin only)
 create or replace function public.assign_branch_moderator_rpc(
   p_branch_id uuid,
   p_target_user_id uuid,
@@ -615,19 +611,13 @@ begin
     raise exception 'Only branch administrators can add moderators to this branch';
   end if;
 
-  select id, is_deleted into v_branch
-  from public.branches
-  where id = p_branch_id;
-
+  select id, is_deleted into v_branch from public.branches where id = p_branch_id;
   if not found or v_branch.is_deleted then
     raise exception 'Branch not found or has been deleted';
   end if;
 
   select id, full_name, user_name, email, avatar, account_status, user_type
-  into v_user
-  from public.users
-  where id = p_target_user_id;
-
+  into v_user from public.users where id = p_target_user_id;
   if not found or v_user.account_status <> 'ACTIVE' then
     raise exception 'Target user not found or inactive';
   end if;
@@ -656,8 +646,7 @@ begin
   select id, is_admin, is_moderator, is_deleted
   into v_existing
   from public.branch_memberships
-  where branch_id = p_branch_id
-    and user_id = p_target_user_id;
+  where branch_id = p_branch_id and user_id = p_target_user_id;
 
   if found then
     if v_existing.is_admin and not v_existing.is_deleted then
@@ -696,7 +685,6 @@ begin
 end;
 $$;
 
--- 7.4 Get Branch Finance Action Code (Branch Admin only)
 create or replace function public.get_branch_action_code(p_branch_id uuid)
 returns text
 language plpgsql
@@ -713,8 +701,7 @@ begin
   select coalesce(finance_action_code, '1234')
   into v_code
   from public.branches
-  where id = p_branch_id
-    and is_deleted = false;
+  where id = p_branch_id and is_deleted = false;
 
   if not found then
     raise exception 'Branch not found or has been deleted';
@@ -724,7 +711,6 @@ begin
 end;
 $$;
 
--- 7.5 Update Branch Finance Action Code (Branch Admin only)
 create or replace function public.update_branch_action_code(
   p_branch_id uuid,
   p_new_code text
@@ -747,10 +733,8 @@ begin
   end if;
 
   update public.branches
-  set finance_action_code = v_trimmed,
-      updated_at = now()
-  where id = p_branch_id
-    and is_deleted = false;
+  set finance_action_code = v_trimmed, updated_at = now()
+  where id = p_branch_id and is_deleted = false;
 
   if not found then
     raise exception 'Branch not found or has been deleted';
@@ -760,7 +744,6 @@ begin
 end;
 $$;
 
--- 7.6 Update Finance Entry (with creator, category & moderator actionCode checks)
 create or replace function public.update_finance_entry_rpc(
   p_branch_id uuid,
   p_entry_id uuid,
@@ -794,10 +777,7 @@ declare
   v_allowed jsonb;
 begin
   select id, is_deleted, coalesce(finance_action_code, '1234') as finance_action_code
-  into v_branch
-  from public.branches
-  where id = p_branch_id;
-
+  into v_branch from public.branches where id = p_branch_id;
   if not found or v_branch.is_deleted then
     raise exception 'Branch not found or has been deleted';
   end if;
@@ -810,12 +790,8 @@ begin
     raise exception 'Only branch administrators or moderators can perform this action';
   end if;
 
-  select id, category_id, recorded_by
-  into v_existing
-  from public.branch_finances
-  where id = p_entry_id
-    and branch_id = p_branch_id;
-
+  select id, category_id, recorded_by into v_existing
+  from public.branch_finances where id = p_entry_id and branch_id = p_branch_id;
   if not found then
     raise exception 'Finance entry not found or does not belong to this branch';
   end if;
@@ -831,10 +807,7 @@ begin
 
     select allowed_category_ids into v_allowed
     from public.branch_memberships
-    where branch_id = p_branch_id
-      and user_id = auth.uid()
-      and is_moderator = true
-      and is_deleted = false
+    where branch_id = p_branch_id and user_id = auth.uid() and is_moderator = true and is_deleted = false
     limit 1;
 
     if v_allowed is not null and jsonb_array_length(v_allowed) > 0 then
@@ -844,15 +817,11 @@ begin
     end if;
   end if;
 
-  select id, type into v_cat
-  from public.branch_finance_categories
-  where id = p_category_id
-    and branch_id = p_branch_id;
-
+  select id, type into v_cat from public.branch_finance_categories
+  where id = p_category_id and branch_id = p_branch_id;
   if not found then
     raise exception 'Invalid category selected for this branch';
   end if;
-
   if v_cat.type <> p_type then
     raise exception 'Category type mismatch';
   end if;
@@ -873,14 +842,12 @@ begin
       salary_month = p_salary_month,
       details = coalesce(p_details, '[]'::jsonb),
       updated_at = now()
-  where id = p_entry_id
-    and branch_id = p_branch_id;
+  where id = p_entry_id and branch_id = p_branch_id;
 
   return p_entry_id;
 end;
 $$;
 
--- 7.7 Delete Finance Entry (with creator, category & moderator actionCode checks)
 create or replace function public.delete_finance_entry_rpc(
   p_branch_id uuid,
   p_entry_id uuid,
@@ -900,10 +867,7 @@ declare
   v_allowed jsonb;
 begin
   select id, is_deleted, coalesce(finance_action_code, '1234') as finance_action_code
-  into v_branch
-  from public.branches
-  where id = p_branch_id;
-
+  into v_branch from public.branches where id = p_branch_id;
   if not found or v_branch.is_deleted then
     raise exception 'Branch not found or has been deleted';
   end if;
@@ -916,12 +880,8 @@ begin
     raise exception 'Only branch administrators or moderators can perform this action';
   end if;
 
-  select id, category_id, recorded_by
-  into v_existing
-  from public.branch_finances
-  where id = p_entry_id
-    and branch_id = p_branch_id;
-
+  select id, category_id, recorded_by into v_existing
+  from public.branch_finances where id = p_entry_id and branch_id = p_branch_id;
   if not found then
     raise exception 'Finance entry not found or does not belong to this branch';
   end if;
@@ -933,10 +893,7 @@ begin
   if not v_is_admin then
     select allowed_category_ids into v_allowed
     from public.branch_memberships
-    where branch_id = p_branch_id
-      and user_id = auth.uid()
-      and is_moderator = true
-      and is_deleted = false
+    where branch_id = p_branch_id and user_id = auth.uid() and is_moderator = true and is_deleted = false
     limit 1;
 
     if v_allowed is not null and jsonb_array_length(v_allowed) > 0 then
@@ -950,15 +907,11 @@ begin
     end if;
   end if;
 
-  delete from public.branch_finances
-  where id = p_entry_id
-    and branch_id = p_branch_id;
-
+  delete from public.branch_finances where id = p_entry_id and branch_id = p_branch_id;
   return p_entry_id;
 end;
 $$;
 
--- 7.8 Atomic Payment Recording RPC
 create or replace function public.record_finance_payment_rpc(
   p_branch_id uuid,
   p_entry_id uuid,
@@ -992,8 +945,7 @@ begin
   select id, branch_id, amount, total_amount, paid_amount, due_amount, recorded_by
   into v_entry
   from public.branch_finances
-  where id = p_entry_id
-    and branch_id = p_branch_id
+  where id = p_entry_id and branch_id = p_branch_id
   for update;
 
   if not found then
@@ -1024,20 +976,13 @@ begin
   returning id into v_payment_id;
 
   update public.branch_finances
-  set paid_amount = v_new_paid,
-      due_amount = v_new_due,
-      payment_status = v_new_status,
-      updated_at = now()
+  set paid_amount = v_new_paid, due_amount = v_new_due, payment_status = v_new_status, updated_at = now()
   where id = p_entry_id;
 
-  return jsonb_build_object(
-    'entry_id', p_entry_id,
-    'payment_id', v_payment_id
-  );
+  return jsonb_build_object('entry_id', p_entry_id, 'payment_id', v_payment_id);
 end;
 $$;
 
--- Grant execute on RPCs to authenticated users
 grant execute on function public.soft_delete_branch_rpc(uuid) to authenticated;
 grant execute on function public.promote_or_add_branch_admin_rpc(uuid, uuid) to authenticated;
 grant execute on function public.assign_branch_moderator_rpc(uuid, uuid, jsonb) to authenticated;
@@ -1046,78 +991,3 @@ grant execute on function public.update_branch_action_code(uuid, text) to authen
 grant execute on function public.update_finance_entry_rpc(uuid, uuid, public.finance_type, numeric, numeric, numeric, text, uuid, text, timestamptz, text, text, uuid, text, jsonb, text) to authenticated;
 grant execute on function public.delete_finance_entry_rpc(uuid, uuid, text) to authenticated;
 grant execute on function public.record_finance_payment_rpc(uuid, uuid, numeric, timestamptz, text) to authenticated;
-
--- ============================================================================
--- 8. Supabase Storage Buckets & Policies
--- ============================================================================
-insert into storage.buckets (id, name, public)
-values
-  ('profile_assets', 'profile_assets', true),
-  ('branch_assets', 'branch_assets', true)
-on conflict (id) do update set public = true;
-
--- Public read access for profile_assets & branch_assets
-drop policy if exists "public_read_assets" on storage.objects;
-create policy "public_read_assets"
-  on storage.objects for select
-  to anon, authenticated
-  using (bucket_id in ('profile_assets', 'branch_assets'));
-
--- Profile avatar upload/update/delete by owner
-drop policy if exists "profile_assets_owner_insert" on storage.objects;
-create policy "profile_assets_owner_insert"
-  on storage.objects for insert
-  to authenticated
-  with check (
-    bucket_id = 'profile_assets'
-    and (storage.foldername(name))[1] = auth.uid()::text
-  );
-
-drop policy if exists "profile_assets_owner_update" on storage.objects;
-create policy "profile_assets_owner_update"
-  on storage.objects for update
-  to authenticated
-  using (
-    bucket_id = 'profile_assets'
-    and (storage.foldername(name))[1] = auth.uid()::text
-  );
-
-drop policy if exists "profile_assets_owner_delete" on storage.objects;
-create policy "profile_assets_owner_delete"
-  on storage.objects for delete
-  to authenticated
-  using (
-    bucket_id = 'profile_assets'
-    and (storage.foldername(name))[1] = auth.uid()::text
-  );
-
--- Branch cover upload/update/delete by App Admin or Branch Admin
-drop policy if exists "branch_assets_admin_insert" on storage.objects;
-create policy "branch_assets_admin_insert"
-  on storage.objects for insert
-  to authenticated
-  with check (
-    bucket_id = 'branch_assets'
-    and (storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    and (public.is_app_admin() or public.is_branch_admin(((storage.foldername(name))[1])::uuid))
-  );
-
-drop policy if exists "branch_assets_admin_update" on storage.objects;
-create policy "branch_assets_admin_update"
-  on storage.objects for update
-  to authenticated
-  using (
-    bucket_id = 'branch_assets'
-    and (storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    and (public.is_app_admin() or public.is_branch_admin(((storage.foldername(name))[1])::uuid))
-  );
-
-drop policy if exists "branch_assets_admin_delete" on storage.objects;
-create policy "branch_assets_admin_delete"
-  on storage.objects for delete
-  to authenticated
-  using (
-    bucket_id = 'branch_assets'
-    and (storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-    and (public.is_app_admin() or public.is_branch_admin(((storage.foldername(name))[1])::uuid))
-  );
